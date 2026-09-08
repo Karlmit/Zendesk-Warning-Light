@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, asdict, fields
 from datetime import datetime, timezone
 from typing import Any
 
+from . import modes
 from .auth import CLIENT_ID
 from .paths import assets_dir, config_path
 
@@ -26,6 +27,11 @@ class Config:
     # --- Connection -------------------------------------------------------
     subdomain: str = "yourcompany"
     client_id: str = CLIENT_ID
+
+    # --- Day mode ---------------------------------------------------------
+    # "helpdesk" | "focus" | "schedule". Helpdesk is the post-install default.
+    mode: str = modes.HELPDESK
+    schedule: dict = field(default_factory=modes.default_schedule)
 
     # --- What to watch ----------------------------------------------------
     watched_group_ids: list[int] = field(default_factory=list)
@@ -68,6 +74,32 @@ class Config:
         """Whether we know *where* to connect. Signing in is tracked separately."""
         return bool(self.subdomain and self.client_id)
 
+    # --- day mode ---------------------------------------------------------
+
+    def effective_mode(self, day=None) -> str:
+        """Today's mode: "helpdesk", "focus" or "off"."""
+        return modes.resolve(self.mode, self.schedule, day)
+
+    def mode_label(self) -> str:
+        """Human name of the effective mode, noting when it came from the plan."""
+        effective = self.effective_mode()
+        if self.mode == modes.SCHEDULE:
+            return "Schedule → {}".format(modes.label(effective))
+        return modes.label(effective)
+
+    def is_off_day(self) -> bool:
+        """True when the app should make no Zendesk calls at all."""
+        return self.effective_mode() == modes.OFF
+
+    def rule_enabled(self, rule: str) -> bool:
+        """A rule fires only if you ticked it *and* today's mode permits it."""
+        ticked = {
+            modes.RULE_NEW_UNASSIGNED: self.alert_on_new_unassigned,
+            modes.RULE_BECAME_UNASSIGNED: self.alert_on_became_unassigned,
+            modes.RULE_PENDING_TO_OPEN: self.alert_on_pending_to_open,
+        }.get(rule, False)
+        return bool(ticked) and modes.rule_allowed(self.effective_mode(), rule)
+
     # --- pause handling ---------------------------------------------------
 
     def pause_expiry(self) -> datetime | None:
@@ -90,7 +122,8 @@ class Config:
         return True
 
     def is_active(self) -> bool:
-        return self.enabled and not self.is_paused()
+        """Whether warnings may appear right now."""
+        return self.enabled and not self.is_paused() and not self.is_off_day()
 
     # --- persistence ------------------------------------------------------
 
@@ -117,6 +150,9 @@ class Config:
         cfg.opacity = max(0.2, min(1.0, float(cfg.opacity)))
         if not cfg.client_id:
             cfg.client_id = CLIENT_ID
+        if cfg.mode not in modes.SELECTABLE:
+            cfg.mode = modes.HELPDESK
+        cfg.schedule = modes.sanitise_schedule(cfg.schedule)
         return cfg
 
     def save(self) -> None:
@@ -139,12 +175,17 @@ def load() -> Config:
 
     cfg = Config.from_dict(raw)
 
-    # Rewrite a v1 file once, so the retired client secret does not linger on disk
-    # and the migration notice is not logged on every start.
+    # Rewrite the file once when it is out of step with this version, so retired v1
+    # keys do not linger and newly added settings are visible and hand-editable
+    # rather than silently defaulted on every load.
     legacy = {"client_secret_enc", "my_user_id", "my_email"} & set(raw)
-    if legacy:
-        log.info("removing retired v1 settings from config.json: %s",
-                 ", ".join(sorted(legacy)))
+    missing = {f.name for f in fields(Config)} - set(raw)
+    if legacy or missing:
+        if legacy:
+            log.info("removing retired settings from config.json: %s",
+                     ", ".join(sorted(legacy)))
+        if missing:
+            log.info("adding new settings to config.json: %s", ", ".join(sorted(missing)))
         try:
             cfg.save()
         except Exception:

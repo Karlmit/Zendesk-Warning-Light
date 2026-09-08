@@ -22,7 +22,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
-from . import sources
+from . import modes, sources
 from .auth import AuthError, AuthExpired, TokenStore
 from .config import Config
 from .paths import state_path
@@ -36,9 +36,9 @@ STATE_RETENTION_DAYS = 30
 MAX_TRACKED_TICKETS = 20000
 GROUP_REFRESH_SECONDS = 3600
 
-REASON_NEW_UNASSIGNED = "new_unassigned"
-REASON_BECAME_UNASSIGNED = "became_unassigned"
-REASON_PENDING_TO_OPEN = "pending_to_open"
+REASON_NEW_UNASSIGNED = modes.RULE_NEW_UNASSIGNED
+REASON_BECAME_UNASSIGNED = modes.RULE_BECAME_UNASSIGNED
+REASON_PENDING_TO_OPEN = modes.RULE_PENDING_TO_OPEN
 
 REASON_TEXT = {
     REASON_NEW_UNASSIGNED: "New unassigned ticket",
@@ -80,6 +80,7 @@ class Monitor(QObject):
         self._groups_fetched_at = 0.0
         self._polling = False
         self._auth_ok = True
+        self._off_day_announced = False
 
         self._source_state: dict[str, object] = {}
         self._last_poll_ts: float = 0.0
@@ -193,8 +194,12 @@ class Monitor(QObject):
             return
         self._polling = True
         try:
-            self._poll()
-            self._set_auth_ok(True, "")
+            if self._config.is_off_day():
+                self._handle_off_day()
+            else:
+                self._off_day_announced = False
+                self._poll()
+                self._set_auth_ok(True, "")
         except AuthExpired as exc:
             log.error("sign-in expired: %s", exc)
             self._set_auth_ok(False, str(exc))
@@ -214,6 +219,22 @@ class Monitor(QObject):
         finally:
             self._polling = False
             self._schedule_next()
+
+    def _handle_off_day(self) -> None:
+        """An off day is genuinely idle: no requests, no warnings.
+
+        We deliberately leave ``_last_poll_ts`` alone. By the next working day it is
+        far enough in the past that the staleness check triggers a silent re-seed,
+        so the backlog that built up while we were away never lands as alerts.
+        """
+        if not self._off_day_announced:
+            log.info("%s - not polling Zendesk today", self._config.mode_label())
+            self._off_day_announced = True
+        if self._alerts:
+            self._alerts.clear()
+            self._save_state()
+        self._emit_alerts()
+        self.status_changed.emit("Off Day - not polling")
 
     def _poll(self) -> None:
         if self._client is None:
@@ -324,13 +345,12 @@ class Monitor(QObject):
         # --- rule 1: nobody owns this ticket ------------------------------
         if self._needs_owner(curr) and not self._needs_owner(prev):
             brand_new = prev is None
-            allowed = cfg.alert_on_new_unassigned if brand_new else cfg.alert_on_became_unassigned
-            if allowed:
-                reason = REASON_NEW_UNASSIGNED if brand_new else REASON_BECAME_UNASSIGNED
+            reason = REASON_NEW_UNASSIGNED if brand_new else REASON_BECAME_UNASSIGNED
+            if cfg.rule_enabled(reason):
                 self._raise_alert(ticket_id, reason, curr)
 
         # --- rule 2: my ticket bounced from pending back to open ----------
-        if (cfg.alert_on_pending_to_open
+        if (cfg.rule_enabled(REASON_PENDING_TO_OPEN)
                 and prev is not None
                 and prev.get("status") == "pending"
                 and self._is_my_reopened(curr)):
@@ -367,8 +387,13 @@ class Monitor(QObject):
             del self._alerts[ticket_id]
 
     def _prune_alerts_outside_scope(self) -> None:
-        """After a settings change, drop alerts that no longer match the rules."""
-        for ticket_id in list(self._alerts):
+        """After a settings or mode change, drop alerts that no longer apply."""
+        for ticket_id, alert in list(self._alerts.items()):
+            if not self._config.rule_enabled(alert.reason):
+                log.info("cleared alert on #%s (%s no longer active in %s)",
+                         ticket_id, alert.reason, self._config.mode_label())
+                del self._alerts[ticket_id]
+                continue
             snapshot = self._tickets.get(ticket_id)
             if snapshot:
                 self._drop_alert_if_resolved(ticket_id, snapshot)
@@ -418,10 +443,12 @@ class Monitor(QObject):
             self.status_changed.emit("Disabled")
         elif self._config.is_paused():
             self.status_changed.emit("Paused")
+        elif self._config.is_off_day():
+            self.status_changed.emit("Off Day - not polling")
         elif self._alerts:
             self.status_changed.emit("{} ticket(s) need attention".format(len(self._alerts)))
         else:
-            self.status_changed.emit("Watching")
+            self.status_changed.emit("Watching · {}".format(self._config.mode_label()))
 
     @Slot()
     def dismiss_all(self) -> None:

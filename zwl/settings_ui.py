@@ -13,11 +13,11 @@ from PySide6.QtGui import QBrush, QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QSpinBox, QTabWidget, QVBoxLayout,
-    QWidget,
+    QListWidgetItem, QMessageBox, QPushButton, QRadioButton, QSpinBox, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
-from . import autostart, overlay
+from . import autostart, modes, overlay
 from .auth import AuthError, TokenStore
 from .config import Config
 from .paths import assets_dir, data_dir, log_path
@@ -79,6 +79,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._build_connection_tab(), "Connection")
         self._tabs.addTab(self._build_groups_tab(), "Groups")
         self._tabs.addTab(self._build_alerts_tab(), "Alerts")
+        self._tabs.addTab(self._build_schedule_tab(), "Schedule")
         self._tabs.addTab(self._build_appearance_tab(), "Appearance")
         self._tabs.addTab(self._build_general_tab(), "General")
 
@@ -197,6 +198,10 @@ class SettingsDialog(QDialog):
         self.identity_label.setWordWrap(True)
         self.identity_label.setStyleSheet("color:#888;")
         rules_layout.addWidget(self.identity_label)
+
+        self.mode_note = QLabel("")
+        self.mode_note.setWordWrap(True)
+        rules_layout.addWidget(self.mode_note)
         layout.addWidget(rules)
 
         timing = QGroupBox("Polling")
@@ -213,6 +218,101 @@ class SettingsDialog(QDialog):
 
         layout.addStretch(1)
         return page
+
+    def _build_schedule_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        today = QGroupBox("Which mode to use")
+        today_layout = QVBoxLayout(today)
+        self.mode_radios: dict[str, QRadioButton] = {}
+        for value, text in (
+            (modes.HELPDESK, "Always a Helpdesk Day"),
+            (modes.FOCUS, "Always a Focus Day"),
+            (modes.SCHEDULE, "Follow the weekly schedule below"),
+        ):
+            radio = QRadioButton(text)
+            radio.toggled.connect(self._on_mode_radio_changed)
+            self.mode_radios[value] = radio
+            today_layout.addWidget(radio)
+        self.today_label = QLabel("")
+        self.today_label.setWordWrap(True)
+        today_layout.addWidget(self.today_label)
+        layout.addWidget(today)
+
+        self.week_box = QGroupBox("Weekly schedule")
+        week_form = QFormLayout(self.week_box)
+        self.day_combos: dict[str, QComboBox] = {}
+        current_key = modes.weekday_key()
+        for key in modes.WEEKDAY_KEYS:
+            combo = QComboBox()
+            for choice in modes.DAY_CHOICES:
+                combo.addItem(modes.label(choice), choice)
+            combo.currentIndexChanged.connect(self._refresh_today_label)
+            self.day_combos[key] = combo
+            name = modes.WEEKDAY_LABELS[key]
+            if key == current_key:
+                name = "{}  (today)".format(name)
+            week_form.addRow(name, combo)
+        layout.addWidget(self.week_box)
+
+        explain = QGroupBox("What the modes mean")
+        explain_layout = QVBoxLayout(explain)
+        for mode_key in (modes.HELPDESK, modes.FOCUS, modes.OFF):
+            row = QLabel("<b>{}</b> — {}".format(
+                modes.label(mode_key), modes.DESCRIPTIONS[mode_key]))
+            row.setWordWrap(True)
+            row.setTextFormat(Qt.RichText)
+            explain_layout.addWidget(row)
+        layout.addWidget(explain)
+
+        layout.addStretch(1)
+        return page
+
+    def _on_mode_radio_changed(self) -> None:
+        self.week_box.setEnabled(self._selected_mode() == modes.SCHEDULE)
+        self._refresh_today_label()
+
+    def _selected_mode(self) -> str:
+        for value, radio in self.mode_radios.items():
+            if radio.isChecked():
+                return value
+        return modes.HELPDESK
+
+    def _refresh_today_label(self) -> None:
+        """Show what the current choices mean for today, right now."""
+        mode = self._selected_mode()
+        schedule = {key: combo.currentData() for key, combo in self.day_combos.items()}
+        effective = modes.resolve(mode, schedule)
+
+        colour = {"helpdesk": "#2e7d32", "focus": "#ffb020", "off": "#8b93a1"}[effective]
+        name = modes.label(effective)
+        article = "an" if name[:1].upper() in "AEIOU" else "a"
+        if mode == modes.SCHEDULE:
+            detail = "Today is {}, so the app is on {} <b>{}</b>.".format(
+                modes.WEEKDAY_LABELS[modes.weekday_key()], article, name)
+        else:
+            detail = "Every day is {} <b>{}</b> until you change this.".format(article, name)
+        self.today_label.setText(
+            "<span style='color:{}'>{}</span>".format(colour, detail))
+        self._refresh_mode_note(effective)
+
+    def _refresh_mode_note(self, effective: str) -> None:
+        if not hasattr(self, "mode_note"):
+            return
+        if effective == modes.FOCUS:
+            self.mode_note.setText(
+                "<span style='color:#ffb020'>Today is a Focus Day, so the first two "
+                "rules stay silent whatever is ticked here. Only your own tickets "
+                "reopening will interrupt you.</span>")
+        elif effective == modes.OFF:
+            self.mode_note.setText(
+                "<span style='color:#8b93a1'>Today is an Off Day: nothing fires and "
+                "Zendesk is not contacted at all.</span>")
+        else:
+            self.mode_note.setText(
+                "<span style='color:#888'>Today is a Helpdesk Day, so every rule you "
+                "tick above is live. Change this on the Schedule tab.</span>")
 
     def _build_appearance_tab(self) -> QWidget:
         page = QWidget()
@@ -320,6 +420,12 @@ class SettingsDialog(QDialog):
         self.cb_became_unassigned.setChecked(cfg.alert_on_became_unassigned)
         self.cb_pending_to_open.setChecked(cfg.alert_on_pending_to_open)
         self.poll_spin.setValue(cfg.poll_seconds)
+
+        self.mode_radios.get(cfg.mode, self.mode_radios[modes.HELPDESK]).setChecked(True)
+        for key, combo in self.day_combos.items():
+            index = combo.findData(cfg.schedule.get(key, modes.HELPDESK))
+            combo.setCurrentIndex(index if index >= 0 else 0)
+        self._on_mode_radio_changed()
 
         self._populate_animations()
         self.height_spin.setValue(cfg.animation_height)
@@ -474,6 +580,10 @@ class SettingsDialog(QDialog):
         cfg.alert_on_became_unassigned = self.cb_became_unassigned.isChecked()
         cfg.alert_on_pending_to_open = self.cb_pending_to_open.isChecked()
         cfg.poll_seconds = self.poll_spin.value()
+
+        cfg.mode = self._selected_mode()
+        cfg.schedule = {key: combo.currentData()
+                        for key, combo in self.day_combos.items()}
 
         cfg.animation = self.animation_combo.currentData() or cfg.animation
         cfg.animation_height = self.height_spin.value()
@@ -672,6 +782,9 @@ class SettingsDialog(QDialog):
 
     def show_connection_tab(self) -> None:
         self._tabs.setCurrentIndex(0)
+
+    def show_schedule_tab(self) -> None:
+        self._tabs.setCurrentIndex(3)
 
 
 def _escape(text: str) -> str:

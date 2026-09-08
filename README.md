@@ -19,6 +19,44 @@ Everyone signs in with their own Zendesk account, so the app only ever sees the 
 that person is allowed to see. Two people running it can legitimately get different
 warnings from the same settings.
 
+On top of those tickboxes sits the **day mode**, which decides how much is allowed to
+interrupt you today. A mode can only ever *narrow* what you ticked, never widen it.
+
+## Day modes
+
+Switch mode from the tray: **Mode › Helpdesk Day / Focus Day / Schedule**. The tray
+menu title always shows what is in force, e.g. `Mode: Schedule → Off Day`.
+
+| Mode | What fires | Zendesk polled? |
+|---|---|---|
+| **Helpdesk Day** | Every rule you have ticked: new unassigned tickets, hand-backs, and your own reopens | Yes |
+| **Focus Day** | Only **your own tickets reopening**. Queue tickets stay silent because someone else is covering | Yes |
+| **Off Day** | Nothing | **No — no API calls at all** |
+
+**Helpdesk Day is the default** after installation.
+
+**Focus Day** still polls, so the moment the day ends nothing has been missed — the app
+already knows the current state of every ticket and simply stops suppressing the queue
+rules.
+
+**Off Day** is genuinely idle: no requests are made, so it costs nothing against your
+Zendesk rate limit. Because the app deliberately lets its ticket history go stale while
+off, the next working day begins with a silent catch-up rather than a wall of alerts for
+everything that happened while you were away.
+
+### Schedule mode
+
+Pick **Schedule** and the app follows a weekly plan you set in
+**Settings → Schedule**: each of Monday to Sunday is a Helpdesk, Focus or Off day. The
+default plan is Monday to Friday on the queue, Saturday and Sunday off.
+
+The Schedule tab shows what today resolves to as you edit it, and the same tab explains
+what each mode means. Midnight rollover is handled while the app is running — Friday's
+Helpdesk Day becomes Saturday's Off Day without a restart.
+
+Changing mode takes effect immediately. If a warning is showing that the new mode no
+longer permits, it is dismissed rather than left stranded on screen.
+
 ## Installing
 
 Run **`dist\ZendeskWarningLight-Setup.exe`** and click through the wizard. It installs
@@ -110,7 +148,8 @@ On first launch the Settings window opens on the **Connection** tab.
    the app itself.
 2. **Groups** – the list loads automatically, pre-ticked with your own groups. Adjust it
    if you want. *Nothing ticked means every group you can see.*
-3. **Appearance** – pick the animation, size, screen and corner. **Preview** shows it for
+3. **Schedule** – optional. Leave it on *Always a Helpdesk Day*, or set a weekly plan.
+4. **Appearance** – pick the animation, size, screen and corner. **Preview** shows it for
    four seconds without waiting for a real ticket.
 
 There is no user ID to look up and no secret to paste: signing in tells the app who you
@@ -140,6 +179,8 @@ Zendesk account is enough; there is no shared secret to rotate.
 ## Tray menu
 
 - **Enabled** – master on/off switch, remembered across restarts.
+- **Mode** – Helpdesk Day, Focus Day, or Schedule, plus a shortcut to edit the weekly
+  plan. The submenu title names the mode currently in force.
 - **Pause** – 30 minutes, 1 hour, 4 hours, or the rest of today. The tray icon greys out
   and the tooltip tells you when it comes back. Pauses survive a restart and expire on
   their own.
@@ -273,6 +314,7 @@ main.py                 entry point
 zwl/app.py              tray icon, menus, wiring
 zwl/auth.py             sign-in (PKCE), token store, rotating refresh
 zwl/monitor.py          polling loop and the transition rules
+zwl/modes.py            day modes, the rule mask and the weekday plan
 zwl/sources.py          the two ticket sources and how one is chosen
 zwl/zendesk.py          REST client, authenticated as the signed-in user
 zwl/overlay.py          the always-on-top animated window
@@ -284,6 +326,7 @@ zwl/autostart.py        Windows Run-key registration
 assets/                 bundled animations and the generated app.ico
 tests/test_rules.py     transition rules, no network needed
 tests/test_sources.py   ticket sources and their selection, no network needed
+tests/test_modes.py     day modes, the rule mask and the off-day silence
 tools/make_icon.py      generates assets/app.ico for the build
 tools/verify_oauth.py   standalone sign-in check, safe to hand to a colleague
 
@@ -313,7 +356,9 @@ For anything else, start with the log — **Settings → General → Open log fi
 | Tray icon is red | Not signed in, sign-in expired, or a Zendesk error — the tooltip says which |
 | "Zendesk sign-in expired" | Tray menu → **Sign in to Zendesk…**. Happens after ~30 days of not running the app |
 | Sign-in never completes | Ports 47821-47823 all busy, or a redirect URL missing from the OAuth client |
-| Nothing ever fires | No groups ticked *and* the rules disabled, or the app is paused — check the tray tooltip |
+| Nothing ever fires | Check the tray tooltip — it names the mode. An Off Day is silent by design, and a Focus Day only allows your own reopens |
+| Queue alerts stopped but reopens still work | You are on a Focus Day. Tray › Mode › Helpdesk Day |
+| No Zendesk traffic at all | An Off Day makes no API calls. Tray › Mode, or edit Settings → Schedule |
 | Too many alerts | Groups tab is empty, so it is watching every group |
 | Reopen rule never fires | Not signed in — the rule needs to know who you are |
 | A ticked group never fires | Your Zendesk role cannot see that group's tickets; greyed-out rows warn about this |

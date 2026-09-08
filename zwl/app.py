@@ -9,11 +9,11 @@ import webbrowser
 from datetime import datetime, timedelta, timezone
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from . import config as config_module, icons, overlay
+from . import config as config_module, icons, modes, overlay
 from .auth import TokenStore
 from .config import Config
 from .monitor import Alert, Monitor
@@ -61,6 +61,7 @@ class WarningLightApp(QObject):
         self._last_error: str = ""
         self._settings_dialog: SettingsDialog | None = None
         self._was_paused = self._config.is_paused()
+        self._last_effective_mode = self._config.effective_mode()
         self._auth_ok = True
 
         self._tokens = TokenStore(base_url=self._config.base_url,
@@ -121,6 +122,24 @@ class WarningLightApp(QObject):
         self._enabled_action.toggled.connect(self._on_enabled_toggled)
         menu.addAction(self._enabled_action)
 
+        self._mode_menu = menu.addMenu("Mode")
+        self._mode_group = QActionGroup(self._mode_menu)
+        self._mode_group.setExclusive(True)
+        self._mode_actions: dict[str, QAction] = {}
+        for value, text in (
+            (modes.HELPDESK, "Helpdesk Day"),
+            (modes.FOCUS, "Focus Day"),
+            (modes.SCHEDULE, "Schedule"),
+        ):
+            action = QAction(text, self._mode_menu, checkable=True)
+            action.setActionGroup(self._mode_group)
+            action.triggered.connect(
+                lambda _checked=False, m=value: self._on_mode_selected(m))
+            self._mode_menu.addAction(action)
+            self._mode_actions[value] = action
+        self._mode_menu.addSeparator()
+        self._mode_menu.addAction("Edit the weekly schedule…", self._open_schedule)
+
         pause_menu = menu.addMenu("Pause")
         for label, minutes in PAUSE_CHOICES:
             action = pause_menu.addAction(label)
@@ -149,6 +168,13 @@ class WarningLightApp(QObject):
     def _refresh_menu(self) -> None:
         needs_sign_in = not self._tokens.is_signed_in or not self._auth_ok
         self._sign_in_action.setVisible(needs_sign_in)
+
+        self._mode_menu.setTitle("Mode: {}".format(self._config.mode_label()))
+        for value, action in self._mode_actions.items():
+            action.blockSignals(True)
+            action.setChecked(self._config.mode == value)
+            action.blockSignals(False)
+
         paused = self._config.is_paused()
         self._resume_action.setEnabled(paused or not self._config.enabled)
         self._enabled_action.blockSignals(True)
@@ -167,9 +193,12 @@ class WarningLightApp(QObject):
         if expiry and self._config.is_paused():
             local = expiry.astimezone()
             return "Paused until {}".format(local.strftime("%H:%M on %a %d %b"))
+        if self._config.is_off_day():
+            return "{} - not polling".format(self._config.mode_label())
         if self._alerts:
-            return "{} ticket(s) need attention".format(len(self._alerts))
-        return "Watching Zendesk"
+            return "{} ticket(s) need attention · {}".format(
+                len(self._alerts), self._config.mode_label())
+        return "Watching Zendesk · {}".format(self._config.mode_label())
 
     # ------------------------------------------------------------------ #
     # state changes
@@ -271,6 +300,37 @@ class WarningLightApp(QObject):
         log.info("app %s from the tray", "enabled" if enabled else "disabled")
         self._push_config()
 
+    def _on_mode_selected(self, mode: str) -> None:
+        if mode == self._config.mode:
+            return
+        self._config.mode = mode
+        self._last_effective_mode = self._config.effective_mode()
+        log.info("mode set to %s (today: %s)", mode, self._config.mode_label())
+        if self._config.is_off_day():
+            self._overlay.hide_warning()
+        self._push_config()
+        self.poll_requested.emit()
+        if self._tray.supportsMessages():
+            self._tray.showMessage(
+                "Zendesk Warning Light",
+                self._mode_summary(),
+                icons.tray_icon(icons.IDLE), 5000)
+
+    def _mode_summary(self) -> str:
+        effective = self._config.effective_mode()
+        if effective == modes.OFF:
+            return ("Off Day - no warnings and no Zendesk calls until the next "
+                    "working day.")
+        if effective == modes.FOCUS:
+            return ("Focus Day - only your own tickets reopening will interrupt "
+                    "you.")
+        return "Helpdesk Day - every rule you have ticked is live."
+
+    def _open_schedule(self) -> None:
+        self.open_settings()
+        if self._settings_dialog is not None:
+            self._settings_dialog.show_schedule_tab()
+
     def _pause_for(self, minutes: int) -> None:
         until = datetime.now(timezone.utc) + timedelta(minutes=int(minutes))
         self._apply_pause(until)
@@ -298,6 +358,18 @@ class WarningLightApp(QObject):
         self.poll_requested.emit()
 
     def _check_pause_expiry(self) -> None:
+        # Also catches midnight on a Schedule day, so Friday's Helpdesk Day becomes
+        # Saturday's Off Day without the user restarting anything.
+        effective_now = self._config.effective_mode()
+        if effective_now != self._last_effective_mode:
+            log.info("day mode rolled over: %s -> %s",
+                     self._last_effective_mode, effective_now)
+            self._last_effective_mode = effective_now
+            if effective_now == modes.OFF:
+                self._overlay.hide_warning()
+            self.config_changed.emit(self._config_copy())
+            self._update_icon()
+
         paused_now = self._config.is_paused()
         if self._was_paused and not paused_now:
             log.info("pause expired, watching again")
