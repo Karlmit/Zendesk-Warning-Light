@@ -24,7 +24,9 @@ paths_module.data_dir = lambda: Path(_tmp.name)
 auth_module.tokens_path = lambda: Path(_tmp.name) / "tokens.json"
 
 from zwl.auth import SignedInUser, TokenStore  # noqa: E402
+from zwl import modes  # noqa: E402
 from zwl.config import Config  # noqa: E402
+from zwl.modes import DayMode  # noqa: E402
 from zwl.settings_ui import SettingsDialog  # noqa: E402
 
 GROUPS = [
@@ -46,12 +48,18 @@ def check(label: str, actual, expected) -> None:
         _failures.append(label)
 
 
-def dialog(restricted: bool = False, watched=None) -> SettingsDialog:
+def dialog(restricted: bool = False, watched=None, extra_modes=None,
+           rules=None) -> SettingsDialog:
     tokens = TokenStore(base_url="https://example.zendesk.com")
     tokens._refresh_token = "rt"
     tokens.user = SignedInUser(id=12064701124497, name="Agent", email="a@x.se",
                                role="agent", restricted_agent=restricted)
-    cfg = Config(watched_group_ids=list(watched or []))
+    primary = DayMode(id="primary", name="Primary",
+                      watched_group_ids=list(watched or []))
+    for rule, value in (rules or {}).items():
+        primary.set_rule(rule, value)
+    cfg = Config(mode="primary", day_modes=[primary] + list(extra_modes or []),
+                 schedule={k: "primary" for k in modes.WEEKDAY_KEYS})
     return SettingsDialog(cfg, tokens)
 
 
@@ -122,6 +130,32 @@ def run() -> None:
     d._on_groups_loaded({"all": GROUPS, "mine": MINE, "error": ""})
     check("an existing choice is not overwritten by the default",
           ticked(d), {18564583439761})
+    d.close()
+
+    print("\n6b. THE NEW BIT: each mode keeps its own group selection")
+    other = DayMode(id="other", name="Other", watched_group_ids=[25431951885841])
+    d = dialog(watched=[18564583439761], extra_modes=[other])
+    d._on_groups_loaded({"all": GROUPS, "mine": MINE, "error": ""})
+    check("editing Primary shows its groups", ticked(d), {18564583439761})
+    d.mode_combo.setCurrentIndex(d.mode_combo.findData("other"))
+    check("switching to Other shows its groups", ticked(d), {25431951885841})
+    for i in range(d.group_list.count()):
+        if int(d.group_list.item(i).data(Qt.UserRole)) == 43806224142865:
+            d.group_list.item(i).setCheckState(Qt.Checked)
+    d.mode_combo.setCurrentIndex(d.mode_combo.findData("primary"))
+    check("Primary is unaffected by edits to Other", ticked(d), {18564583439761})
+    d.mode_combo.setCurrentIndex(d.mode_combo.findData("other"))
+    check("Other remembers the extra tick",
+          ticked(d), {25431951885841, 43806224142865})
+    d.close()
+
+    print("\n6c. A reopen-only mode hides the group list, which it cannot use")
+    d = dialog(rules={modes.RULE_NEW_UNASSIGNED: False,
+                      modes.RULE_BECAME_UNASSIGNED: False})
+    d._on_groups_loaded({"all": GROUPS, "mine": MINE, "error": ""})
+    check("group box disabled", d.groups_box.isEnabled(), False)
+    check("list emptied", d.group_list.count(), 0)
+    check("and it explains why", "tied to a group" in d.groups_hint.text(), True)
     d.close()
 
     print("\n7. REGRESSION: a sign-in in flight must not block the group load")

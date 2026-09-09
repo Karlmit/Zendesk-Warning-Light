@@ -28,16 +28,15 @@ class Config:
     subdomain: str = "yourcompany"
     client_id: str = CLIENT_ID
 
-    # --- Day mode ---------------------------------------------------------
-    # "helpdesk" | "focus" | "schedule". Helpdesk is the post-install default.
-    mode: str = modes.HELPDESK
+    # --- Day modes --------------------------------------------------------
+    # Each mode owns its own alert rules and group selection, so "what fires
+    # today" has exactly one answer. `mode` is a mode id, or "off", or
+    # "schedule" (which defers to the weekday plan).
+    mode: str = modes.BUILTIN_HELPDESK
+    day_modes: list = field(default_factory=modes.seed_modes)
     schedule: dict = field(default_factory=modes.default_schedule)
 
-    # --- What to watch ----------------------------------------------------
-    watched_group_ids: list[int] = field(default_factory=list)
-    alert_on_new_unassigned: bool = True
-    alert_on_became_unassigned: bool = True
-    alert_on_pending_to_open: bool = True
+    # --- Polling ----------------------------------------------------------
     poll_seconds: int = 30
 
     # --- Appearance -------------------------------------------------------
@@ -74,31 +73,50 @@ class Config:
         """Whether we know *where* to connect. Signing in is tracked separately."""
         return bool(self.subdomain and self.client_id)
 
-    # --- day mode ---------------------------------------------------------
+    # --- day modes --------------------------------------------------------
+
+    def mode_ids(self) -> set[str]:
+        return {m.id for m in self.day_modes}
+
+    def find_mode(self, mode_id: str):
+        return next((m for m in self.day_modes if m.id == mode_id), None)
 
     def effective_mode(self, day=None) -> str:
-        """Today's mode: "helpdesk", "focus" or "off"."""
-        return modes.resolve(self.mode, self.schedule, day)
+        """The mode id in force for ``day``, or "off"."""
+        return modes.resolve(self.mode, self.schedule, self.mode_ids(), day)
+
+    def active_mode(self, day=None):
+        """The DayMode in force, or None on an off day."""
+        effective = self.effective_mode(day)
+        return None if effective == modes.OFF else self.find_mode(effective)
+
+    def mode_name(self, mode_id: str) -> str:
+        if mode_id == modes.OFF:
+            return modes.OFF_LABEL
+        found = self.find_mode(mode_id)
+        return found.name if found else mode_id
 
     def mode_label(self) -> str:
         """Human name of the effective mode, noting when it came from the plan."""
-        effective = self.effective_mode()
+        name = self.mode_name(self.effective_mode())
         if self.mode == modes.SCHEDULE:
-            return "Schedule → {}".format(modes.label(effective))
-        return modes.label(effective)
+            return "Schedule \u2192 {}".format(name)
+        return name
 
     def is_off_day(self) -> bool:
         """True when the app should make no Zendesk calls at all."""
         return self.effective_mode() == modes.OFF
 
     def rule_enabled(self, rule: str) -> bool:
-        """A rule fires only if you ticked it *and* today's mode permits it."""
-        ticked = {
-            modes.RULE_NEW_UNASSIGNED: self.alert_on_new_unassigned,
-            modes.RULE_BECAME_UNASSIGNED: self.alert_on_became_unassigned,
-            modes.RULE_PENDING_TO_OPEN: self.alert_on_pending_to_open,
-        }.get(rule, False)
-        return bool(ticked) and modes.rule_allowed(self.effective_mode(), rule)
+        """Whether ``rule`` may fire right now, per the mode in force."""
+        active = self.active_mode()
+        return bool(active) and active.rule_enabled(rule)
+
+    @property
+    def watched_group_ids(self) -> list[int]:
+        """Groups the mode in force watches. Empty means every visible group."""
+        active = self.active_mode()
+        return list(active.watched_group_ids) if active else []
 
     # --- pause handling ---------------------------------------------------
 
@@ -128,7 +146,10 @@ class Config:
     # --- persistence ------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        # asdict cannot see inside DayMode instances stored in a plain list.
+        data["day_modes"] = [m.to_dict() for m in self.day_modes]
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Config":
@@ -144,15 +165,40 @@ class Config:
             log.info("migrating v1 OAuth client %r -> %r", cfg.client_id, CLIENT_ID)
             cfg.client_id = CLIENT_ID
 
-        cfg.watched_group_ids = [int(g) for g in cfg.watched_group_ids]
         cfg.poll_seconds = max(10, int(cfg.poll_seconds))
         cfg.animation_height = max(80, min(900, int(cfg.animation_height)))
         cfg.opacity = max(0.2, min(1.0, float(cfg.opacity)))
         if not cfg.client_id:
             cfg.client_id = CLIENT_ID
-        if cfg.mode not in modes.SELECTABLE:
-            cfg.mode = modes.HELPDESK
-        cfg.schedule = modes.sanitise_schedule(cfg.schedule)
+
+        # v2.1 kept one global set of rules and groups. Fold them into the two
+        # seeded modes so behaviour carries over untouched; the old weekday
+        # values ("helpdesk"/"focus"/"off") are already valid mode ids.
+        if "day_modes" not in data:
+            legacy_rules = {
+                modes.RULE_NEW_UNASSIGNED: bool(data.get("alert_on_new_unassigned", True)),
+                modes.RULE_BECAME_UNASSIGNED: bool(data.get("alert_on_became_unassigned", True)),
+                modes.RULE_PENDING_TO_OPEN: bool(data.get("alert_on_pending_to_open", True)),
+            }
+            legacy_groups = []
+            for value in data.get("watched_group_ids") or []:
+                try:
+                    legacy_groups.append(int(value))
+                except (TypeError, ValueError):
+                    continue
+            cfg.day_modes = modes.seed_modes(legacy_rules, legacy_groups)
+            log.info("migrated global rules and %d group(s) into the seeded modes",
+                     len(legacy_groups))
+        else:
+            cfg.day_modes = modes.sanitise_modes(cfg.day_modes)
+
+        ids = cfg.mode_ids()
+        fallback = modes.BUILTIN_HELPDESK if modes.BUILTIN_HELPDESK in ids \
+            else sorted(ids)[0]
+        if cfg.mode not in ids | {modes.OFF, modes.SCHEDULE}:
+            log.info("unknown mode %r; falling back to %r", cfg.mode, fallback)
+            cfg.mode = fallback
+        cfg.schedule = modes.sanitise_schedule(cfg.schedule, ids, fallback)
         return cfg
 
     def save(self) -> None:
@@ -178,7 +224,9 @@ def load() -> Config:
     # Rewrite the file once when it is out of step with this version, so retired v1
     # keys do not linger and newly added settings are visible and hand-editable
     # rather than silently defaulted on every load.
-    legacy = {"client_secret_enc", "my_user_id", "my_email"} & set(raw)
+    legacy = {"client_secret_enc", "my_user_id", "my_email",
+              "watched_group_ids", "alert_on_new_unassigned",
+              "alert_on_became_unassigned", "alert_on_pending_to_open"} & set(raw)
     missing = {f.name for f in fields(Config)} - set(raw)
     if legacy or missing:
         if legacy:

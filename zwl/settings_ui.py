@@ -12,7 +12,7 @@ from PySide6.QtCore import QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
-    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPushButton, QRadioButton, QSpinBox, QTabWidget,
     QVBoxLayout, QWidget,
 )
@@ -72,14 +72,16 @@ class SettingsDialog(QDialog):
         self._my_group_ids: set[int] | None = None
         self._threads: set[_CallThread] = set()
         self._busy: set[str] = set()
+        self._loading = False
+        self._editing_id = (self._config.day_modes[0].id
+                            if self._config.day_modes else modes.BUILTIN_HELPDESK)
 
         self.setWindowTitle("Zendesk Warning Light – Settings")
         self.setMinimumWidth(600)
 
         self._tabs = QTabWidget(self)
         self._tabs.addTab(self._build_connection_tab(), "Connection")
-        self._tabs.addTab(self._build_groups_tab(), "Groups")
-        self._tabs.addTab(self._build_alerts_tab(), "Alerts")
+        self._tabs.addTab(self._build_modes_tab(), "Modes")
         self._tabs.addTab(self._build_schedule_tab(), "Schedule")
         self._tabs.addTab(self._build_appearance_tab(), "Appearance")
         self._tabs.addTab(self._build_general_tab(), "General")
@@ -150,17 +152,51 @@ class SettingsDialog(QDialog):
         layout.addStretch(1)
         return page
 
-    def _build_groups_tab(self) -> QWidget:
+    def _build_modes_tab(self) -> QWidget:
+        """One screen per mode: its name, its rules, and the groups they apply to."""
         page = QWidget()
         layout = QVBoxLayout(page)
 
+        picker = QHBoxLayout()
+        picker.addWidget(QLabel("Mode"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.setMinimumWidth(200)
+        self.mode_combo.currentIndexChanged.connect(self._on_editing_mode_changed)
+        picker.addWidget(self.mode_combo, 1)
+        for text, slot in (("New\u2026", self._on_new_mode),
+                           ("Duplicate", self._on_duplicate_mode),
+                           ("Rename\u2026", self._on_rename_mode),
+                           ("Delete", self._on_delete_mode)):
+            button = QPushButton(text)
+            button.clicked.connect(slot)
+            picker.addWidget(button)
+        picker_wrap = QWidget()
+        picker_wrap.setLayout(picker)
+        layout.addWidget(picker_wrap)
+
+        rules = QGroupBox("Warn me when\u2026")
+        rules_layout = QVBoxLayout(rules)
+        self.rule_checks: dict[str, QCheckBox] = {}
+        for rule in modes.ALL_RULES:
+            check = QCheckBox(modes.RULE_LABELS[rule])
+            check.toggled.connect(self._on_rule_toggled)
+            self.rule_checks[rule] = check
+            rules_layout.addWidget(check)
+        self.identity_label = QLabel("")
+        self.identity_label.setWordWrap(True)
+        self.identity_label.setStyleSheet("color:#888;")
+        rules_layout.addWidget(self.identity_label)
+        layout.addWidget(rules)
+
+        self.groups_box = QGroupBox("Groups this mode watches")
+        groups_layout = QVBoxLayout(self.groups_box)
         self.groups_hint = QLabel("")
         self.groups_hint.setWordWrap(True)
-        layout.addWidget(self.groups_hint)
+        groups_layout.addWidget(self.groups_hint)
 
         self.group_list = QListWidget()
         self.group_list.setAlternatingRowColors(True)
-        layout.addWidget(self.group_list, 1)
+        groups_layout.addWidget(self.group_list, 1)
 
         row = QHBoxLayout()
         self.load_groups_button = QPushButton("Refresh from Zendesk")
@@ -176,92 +212,237 @@ class SettingsDialog(QDialog):
         select_none.clicked.connect(lambda: self._set_all_groups(False))
         row.addWidget(select_none)
         row.addStretch(1)
-        layout.addLayout(row)
+        groups_layout.addLayout(row)
 
         self.groups_status = QLabel("")
         self.groups_status.setWordWrap(True)
         self.groups_status.setStyleSheet("color:#888;")
-        layout.addWidget(self.groups_status)
+        groups_layout.addWidget(self.groups_status)
+        layout.addWidget(self.groups_box, 1)
+
+        self.mode_summary = QLabel("")
+        self.mode_summary.setWordWrap(True)
+        layout.addWidget(self.mode_summary)
         return page
 
-    def _build_alerts_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
+    # --- mode editing -----------------------------------------------------
 
-        rules = QGroupBox("Show the warning when…")
-        rules_layout = QVBoxLayout(rules)
-        self.cb_new_unassigned = QCheckBox("A new ticket arrives with no assignee")
-        self.cb_became_unassigned = QCheckBox("An existing ticket is handed back to the queue")
-        self.cb_pending_to_open = QCheckBox("A ticket assigned to me goes from pending back to open")
-        for cb in (self.cb_new_unassigned, self.cb_became_unassigned, self.cb_pending_to_open):
-            rules_layout.addWidget(cb)
-        self.identity_label = QLabel("")
-        self.identity_label.setWordWrap(True)
-        self.identity_label.setStyleSheet("color:#888;")
-        rules_layout.addWidget(self.identity_label)
+    def _editing_mode(self):
+        return self._config.find_mode(self._editing_id)
 
-        self.mode_note = QLabel("")
-        self.mode_note.setWordWrap(True)
-        rules_layout.addWidget(self.mode_note)
-        layout.addWidget(rules)
+    def _rebuild_mode_combo(self) -> None:
+        self._loading = True
+        try:
+            self.mode_combo.clear()
+            for mode in self._config.day_modes:
+                self.mode_combo.addItem(mode.name, mode.id)
+            index = self.mode_combo.findData(self._editing_id)
+            if index < 0:
+                index = 0
+                if self._config.day_modes:
+                    self._editing_id = self._config.day_modes[0].id
+            self.mode_combo.setCurrentIndex(index)
+        finally:
+            self._loading = False
 
-        timing = QGroupBox("Polling")
-        timing_form = QFormLayout(timing)
-        self.poll_spin = QSpinBox()
-        self.poll_spin.setRange(10, 900)
-        self.poll_spin.setSuffix(" seconds")
-        timing_form.addRow("Check Zendesk every", self.poll_spin)
-        self.source_label = QLabel("")
-        self.source_label.setWordWrap(True)
-        self.source_label.setStyleSheet("color:#888;")
-        timing_form.addRow("", self.source_label)
-        layout.addWidget(timing)
+    def _load_editing_mode(self) -> None:
+        """Push the selected mode into the widgets."""
+        mode = self._editing_mode()
+        if mode is None:
+            return
+        self._loading = True
+        try:
+            for rule, check in self.rule_checks.items():
+                check.setChecked(mode.rule_enabled(rule))
+        finally:
+            self._loading = False
+        self._render_groups()
+        self._refresh_mode_summary()
 
-        layout.addStretch(1)
-        return page
+    def _flush_editing_mode(self) -> None:
+        """Read the widgets back into the selected mode."""
+        mode = self._editing_mode()
+        if mode is None or self._loading:
+            return
+        for rule, check in self.rule_checks.items():
+            mode.set_rule(rule, check.isChecked())
+        mode.watched_group_ids = self._collect_ticked()
+
+    def _on_editing_mode_changed(self) -> None:
+        if self._loading:
+            return
+        self._flush_editing_mode()
+        chosen = self.mode_combo.currentData()
+        if chosen:
+            self._editing_id = chosen
+        self._load_editing_mode()
+
+    def _on_rule_toggled(self) -> None:
+        if self._loading:
+            return
+        self._flush_editing_mode()
+        self._render_groups()
+        self._refresh_mode_summary()
+
+    def _refresh_mode_summary(self) -> None:
+        mode = self._editing_mode()
+        if mode is None:
+            return
+        in_force = self._config.effective_mode()
+        today = ""
+        if in_force == mode.id:
+            today = "  <b>This is the mode in force right now.</b>"
+        elif self._config.mode == modes.SCHEDULE:
+            today = "  Today is running <b>{}</b>.".format(
+                _escape(self._config.mode_name(in_force)))
+        self.mode_summary.setText(
+            "<span style='color:#888'><b>{}</b> warns about: {}.{}</span>".format(
+                _escape(mode.name), _escape(mode.summary()), today))
+
+    def _next_mode_name(self, base: str) -> str:
+        taken = {m.name for m in self._config.day_modes}
+        if base not in taken:
+            return base
+        for n in range(2, 50):
+            candidate = "{} {}".format(base, n)
+            if candidate not in taken:
+                return candidate
+        return base
+
+    def _add_mode(self, mode) -> None:
+        self._config.day_modes.append(mode)
+        self._editing_id = mode.id
+        self._rebuild_mode_combo()
+        self._rebuild_schedule_rows()
+        self._load_editing_mode()
+
+    def _on_new_mode(self) -> None:
+        if len(self._config.day_modes) >= modes.MAX_MODES:
+            QMessageBox.information(self, "Too many modes",
+                                    "{} modes is the limit.".format(modes.MAX_MODES))
+            return
+        name, ok = QInputDialog.getText(self, "New mode", "Name for the new mode:",
+                                        text=self._next_mode_name("New mode"))
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        self._flush_editing_mode()
+        # Start from the user's own groups when we know them - a far more useful
+        # default than "every group in the account".
+        groups = sorted(self._my_group_ids) if self._my_group_ids else []
+        self._add_mode(modes.DayMode(
+            id=modes.new_id(name, self._config.mode_ids()),
+            name=name, watched_group_ids=groups))
+
+    def _on_duplicate_mode(self) -> None:
+        source = self._editing_mode()
+        if source is None:
+            return
+        if len(self._config.day_modes) >= modes.MAX_MODES:
+            QMessageBox.information(self, "Too many modes",
+                                    "{} modes is the limit.".format(modes.MAX_MODES))
+            return
+        self._flush_editing_mode()
+        name = self._next_mode_name("{} (copy)".format(source.name))
+        self._add_mode(source.copy(modes.new_id(name, self._config.mode_ids()), name))
+
+    def _on_rename_mode(self) -> None:
+        mode = self._editing_mode()
+        if mode is None:
+            return
+        name, ok = QInputDialog.getText(self, "Rename mode", "New name:", text=mode.name)
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        mode.name = name
+        self._rebuild_mode_combo()
+        self._rebuild_schedule_rows()
+        self._refresh_mode_summary()
+
+    def _on_delete_mode(self) -> None:
+        mode = self._editing_mode()
+        if mode is None:
+            return
+        if len(self._config.day_modes) <= 1:
+            QMessageBox.information(
+                self, "Cannot delete", "You need at least one mode.")
+            return
+
+        remaining = [m for m in self._config.day_modes if m.id != mode.id]
+        fallback = remaining[0]
+        used_on = [modes.WEEKDAY_LABELS[k] for k, v in self._config.schedule.items()
+                   if v == mode.id]
+        warning = ""
+        if used_on:
+            warning = "\n\n{} in the weekly schedule will switch to {}.".format(
+                ", ".join(used_on), fallback.name)
+
+        confirm = QMessageBox.question(
+            self, "Delete mode",
+            "Delete the mode {}?{}".format(mode.name, warning))
+        if confirm != QMessageBox.Yes:
+            return
+
+        self._config.day_modes = remaining
+        for key, value in list(self._config.schedule.items()):
+            if value == mode.id:
+                self._config.schedule[key] = fallback.id
+        if self._config.mode == mode.id:
+            self._config.mode = fallback.id
+        self._editing_id = fallback.id
+        self._rebuild_mode_combo()
+        self._rebuild_schedule_rows()
+        self._load_editing_mode()
 
     def _build_schedule_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        today = QGroupBox("Which mode to use")
-        today_layout = QVBoxLayout(today)
-        self.mode_radios: dict[str, QRadioButton] = {}
-        for value, text in (
-            (modes.HELPDESK, "Always a Helpdesk Day"),
-            (modes.FOCUS, "Always a Focus Day"),
-            (modes.SCHEDULE, "Follow the weekly schedule below"),
-        ):
-            radio = QRadioButton(text)
-            radio.toggled.connect(self._on_mode_radio_changed)
-            self.mode_radios[value] = radio
-            today_layout.addWidget(radio)
+        intro = QLabel(modes.HOW_MODES_WORK)
+        intro.setWordWrap(True)
+        intro.setTextFormat(Qt.RichText)
+        layout.addWidget(intro)
+
+        chooser = QGroupBox("Which mode to use")
+        chooser_layout = QVBoxLayout(chooser)
+        self.fixed_radio = QRadioButton("Use one mode every day:")
+        self.fixed_radio.toggled.connect(self._on_mode_radio_changed)
+        fixed_row = QHBoxLayout()
+        fixed_row.addWidget(self.fixed_radio)
+        self.fixed_combo = QComboBox()
+        self.fixed_combo.currentIndexChanged.connect(self._refresh_today_label)
+        fixed_row.addWidget(self.fixed_combo, 1)
+        fixed_wrap = QWidget()
+        fixed_wrap.setLayout(fixed_row)
+        chooser_layout.addWidget(fixed_wrap)
+
+        self.schedule_radio = QRadioButton("Follow the weekly schedule below")
+        self.schedule_radio.toggled.connect(self._on_mode_radio_changed)
+        chooser_layout.addWidget(self.schedule_radio)
+
         self.today_label = QLabel("")
         self.today_label.setWordWrap(True)
-        today_layout.addWidget(self.today_label)
-        layout.addWidget(today)
+        chooser_layout.addWidget(self.today_label)
+        layout.addWidget(chooser)
 
         self.week_box = QGroupBox("Weekly schedule")
-        week_form = QFormLayout(self.week_box)
+        self.week_form = QFormLayout(self.week_box)
         self.day_combos: dict[str, QComboBox] = {}
         current_key = modes.weekday_key()
         for key in modes.WEEKDAY_KEYS:
             combo = QComboBox()
-            for choice in modes.DAY_CHOICES:
-                combo.addItem(modes.label(choice), choice)
             combo.currentIndexChanged.connect(self._refresh_today_label)
             self.day_combos[key] = combo
             name = modes.WEEKDAY_LABELS[key]
             if key == current_key:
                 name = "{}  (today)".format(name)
-            week_form.addRow(name, combo)
+            self.week_form.addRow(name, combo)
         layout.addWidget(self.week_box)
 
-        explain = QGroupBox("What the modes mean")
+        explain = QGroupBox("How modes work")
         explain_layout = QVBoxLayout(explain)
-        for mode_key in (modes.HELPDESK, modes.FOCUS, modes.OFF):
-            row = QLabel("<b>{}</b> — {}".format(
-                modes.label(mode_key), modes.DESCRIPTIONS[mode_key]))
+        for text in (modes.SEEDED_NOTE, modes.OFF_DESCRIPTION):
+            row = QLabel(text)
             row.setWordWrap(True)
             row.setTextFormat(Qt.RichText)
             explain_layout.addWidget(row)
@@ -270,50 +451,61 @@ class SettingsDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    def _rebuild_schedule_rows(self) -> None:
+        """Refresh every mode dropdown after modes are added, renamed or removed."""
+        if not hasattr(self, "day_combos"):
+            return
+        self._loading = True
+        try:
+            for combo in list(self.day_combos.values()) + [self.fixed_combo]:
+                previous = combo.currentData()
+                combo.clear()
+                for mode in self._config.day_modes:
+                    combo.addItem(mode.name, mode.id)
+                if combo is not self.fixed_combo:
+                    combo.addItem(modes.OFF_LABEL, modes.OFF)
+                index = combo.findData(previous)
+                combo.setCurrentIndex(index if index >= 0 else 0)
+            for key, combo in self.day_combos.items():
+                wanted = self._config.schedule.get(key)
+                index = combo.findData(wanted)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+            if self._config.mode not in (modes.SCHEDULE, modes.OFF):
+                index = self.fixed_combo.findData(self._config.mode)
+                if index >= 0:
+                    self.fixed_combo.setCurrentIndex(index)
+        finally:
+            self._loading = False
+        self._refresh_today_label()
+
     def _on_mode_radio_changed(self) -> None:
-        self.week_box.setEnabled(self._selected_mode() == modes.SCHEDULE)
+        self.week_box.setEnabled(self.schedule_radio.isChecked())
+        self.fixed_combo.setEnabled(self.fixed_radio.isChecked())
         self._refresh_today_label()
 
     def _selected_mode(self) -> str:
-        for value, radio in self.mode_radios.items():
-            if radio.isChecked():
-                return value
-        return modes.HELPDESK
+        if self.schedule_radio.isChecked():
+            return modes.SCHEDULE
+        return self.fixed_combo.currentData() or modes.BUILTIN_HELPDESK
 
     def _refresh_today_label(self) -> None:
         """Show what the current choices mean for today, right now."""
-        mode = self._selected_mode()
-        schedule = {key: combo.currentData() for key, combo in self.day_combos.items()}
-        effective = modes.resolve(mode, schedule)
-
-        colour = {"helpdesk": "#2e7d32", "focus": "#ffb020", "off": "#8b93a1"}[effective]
-        name = modes.label(effective)
-        article = "an" if name[:1].upper() in "AEIOU" else "a"
-        if mode == modes.SCHEDULE:
-            detail = "Today is {}, so the app is on {} <b>{}</b>.".format(
-                modes.WEEKDAY_LABELS[modes.weekday_key()], article, name)
-        else:
-            detail = "Every day is {} <b>{}</b> until you change this.".format(article, name)
-        self.today_label.setText(
-            "<span style='color:{}'>{}</span>".format(colour, detail))
-        self._refresh_mode_note(effective)
-
-    def _refresh_mode_note(self, effective: str) -> None:
-        if not hasattr(self, "mode_note"):
+        if self._loading or not hasattr(self, "today_label"):
             return
-        if effective == modes.FOCUS:
-            self.mode_note.setText(
-                "<span style='color:#ffb020'>Today is a Focus Day, so the first two "
-                "rules stay silent whatever is ticked here. Only your own tickets "
-                "reopening will interrupt you.</span>")
-        elif effective == modes.OFF:
-            self.mode_note.setText(
-                "<span style='color:#8b93a1'>Today is an Off Day: nothing fires and "
-                "Zendesk is not contacted at all.</span>")
+        chosen = self._selected_mode()
+        schedule = {key: combo.currentData() for key, combo in self.day_combos.items()}
+        effective = modes.resolve(chosen, schedule, self._config.mode_ids())
+        name = self._config.mode_name(effective)
+        colour = "#8b93a1" if effective == modes.OFF else "#2e7d32"
+        article = "an" if name[:1].upper() in "AEIOU" else "a"
+        if chosen == modes.SCHEDULE:
+            detail = "Today is {}, so the app is on {} <b>{}</b>.".format(
+                modes.WEEKDAY_LABELS[modes.weekday_key()], article, _escape(name))
         else:
-            self.mode_note.setText(
-                "<span style='color:#888'>Today is a Helpdesk Day, so every rule you "
-                "tick above is live. Change this on the Schedule tab.</span>")
+            detail = "Every day is {} <b>{}</b> until you change this.".format(
+                article, _escape(name))
+        self.today_label.setText("<span style='color:{}'>{}</span>".format(colour, detail))
 
     def _build_appearance_tab(self) -> QWidget:
         page = QWidget()
@@ -376,6 +568,20 @@ class SettingsDialog(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
 
+        # Polling is global rather than per mode: how often we ask is a different
+        # question from what we care about when we do.
+        timing = QGroupBox("Polling")
+        timing_form = QFormLayout(timing)
+        self.poll_spin = QSpinBox()
+        self.poll_spin.setRange(10, 900)
+        self.poll_spin.setSuffix(" seconds")
+        timing_form.addRow("Check Zendesk every", self.poll_spin)
+        self.source_label = QLabel("")
+        self.source_label.setWordWrap(True)
+        self.source_label.setStyleSheet("color:#888;")
+        timing_form.addRow("", self.source_label)
+        layout.addWidget(timing)
+
         self.autostart_check = QCheckBox("Start automatically when I sign in to Windows")
         layout.addWidget(self.autostart_check)
 
@@ -417,15 +623,19 @@ class SettingsDialog(QDialog):
         self.subdomain_edit.setText(cfg.subdomain)
         self.client_id_edit.setText(cfg.client_id)
 
-        self.cb_new_unassigned.setChecked(cfg.alert_on_new_unassigned)
-        self.cb_became_unassigned.setChecked(cfg.alert_on_became_unassigned)
-        self.cb_pending_to_open.setChecked(cfg.alert_on_pending_to_open)
         self.poll_spin.setValue(cfg.poll_seconds)
 
-        self.mode_radios.get(cfg.mode, self.mode_radios[modes.HELPDESK]).setChecked(True)
-        for key, combo in self.day_combos.items():
-            index = combo.findData(cfg.schedule.get(key, modes.HELPDESK))
-            combo.setCurrentIndex(index if index >= 0 else 0)
+        self._loading = True
+        try:
+            if cfg.mode == modes.SCHEDULE:
+                self.schedule_radio.setChecked(True)
+            else:
+                self.fixed_radio.setChecked(True)
+        finally:
+            self._loading = False
+        self._rebuild_mode_combo()
+        self._rebuild_schedule_rows()
+        self._load_editing_mode()
         self._on_mode_radio_changed()
 
         self._populate_animations()
@@ -454,8 +664,8 @@ class SettingsDialog(QDialog):
                 )
             )
             self.identity_label.setText(
-                "The reopen rule watches tickets assigned to <b>{}</b>.".format(
-                    _escape(user.email)))
+                "The reopen rule watches tickets assigned to <b>{}</b>, in any "
+                "group.".format(_escape(user.email)))
             self.source_label.setText(
                 "Admins read the incremental export; everyone else reads the "
                 "agent-safe ticket sweep. Chosen automatically."
@@ -500,9 +710,23 @@ class SettingsDialog(QDialog):
 
     def _render_groups(self) -> None:
         self.group_list.clear()
-        watched = set(self._config.watched_group_ids)
+        mode = self._editing_mode()
+        watched = set(mode.watched_group_ids) if mode else set()
         user = self._tokens.user
         restricted = bool(user.restricted_agent)
+
+        # The reopen rule ignores groups, so a mode with no queue rule has no use
+        # for this list. Grey it out rather than implying it does something.
+        queue_watched = bool(mode and mode.watches_the_queue)
+        self.groups_box.setEnabled(queue_watched)
+        if not queue_watched:
+            self.group_list.clear()
+            self.groups_hint.setText(
+                "This mode only warns about your own reopened tickets, which are not\n"
+                "tied to a group. Tick one of the first two rules above to choose groups."
+            )
+            self.groups_status.setText("")
+            return
 
         if not self._groups:
             self.groups_hint.setText(
@@ -554,8 +778,8 @@ class SettingsDialog(QDialog):
             self.group_list.addItem(item)
 
     def _remember_ticked(self) -> None:
-        """Preserve the user's ticks across a list rebuild."""
-        self._config.watched_group_ids = self._collect_ticked()
+        """Preserve the ticks of the mode being edited across a list rebuild."""
+        self._flush_editing_mode()
 
     def _collect_ticked(self) -> list[int]:
         return [
@@ -587,13 +811,11 @@ class SettingsDialog(QDialog):
             cfg.subdomain = self.subdomain_edit.text().strip().replace(".zendesk.com", "")
             cfg.client_id = self.client_id_edit.text().strip() or cfg.client_id
 
-        cfg.alert_on_new_unassigned = self.cb_new_unassigned.isChecked()
-        cfg.alert_on_became_unassigned = self.cb_became_unassigned.isChecked()
-        cfg.alert_on_pending_to_open = self.cb_pending_to_open.isChecked()
         cfg.poll_seconds = self.poll_spin.value()
 
+        self._flush_editing_mode()
         cfg.mode = self._selected_mode()
-        cfg.schedule = {key: combo.currentData()
+        cfg.schedule = {key: combo.currentData() or modes.OFF
                         for key, combo in self.day_combos.items()}
 
         cfg.animation = self.animation_combo.currentData() or cfg.animation
@@ -604,7 +826,6 @@ class SettingsDialog(QDialog):
         cfg.margin_x = self.margin_x_spin.value()
         cfg.margin_y = self.margin_y_spin.value()
         cfg.show_caption = self.caption_check.isChecked()
-        cfg.watched_group_ids = self._collect_ticked()
         return cfg
 
     # ------------------------------------------------------------------ #
@@ -733,13 +954,16 @@ class SettingsDialog(QDialog):
         self._my_group_ids = set(mine) if mine else None
         error = payload.get("error") or ""
 
-        # First run: default to the user's own groups rather than "everything".
-        if not self._config.watched_group_ids and self._my_group_ids:
-            self._config.watched_group_ids = sorted(self._my_group_ids)
-            log.info("defaulted the watch list to the user's %d groups",
-                     len(self._my_group_ids))
+        # First run: default every mode that has no groups yet to the user's own,
+        # which is far more useful than "every group in the account".
+        if self._my_group_ids:
+            for mode in self._config.day_modes:
+                if not mode.watched_group_ids:
+                    mode.watched_group_ids = sorted(self._my_group_ids)
+                    log.info("defaulted mode %r to the user's %d group(s)",
+                             mode.id, len(self._my_group_ids))
 
-        self._render_groups()
+        self._load_editing_mode()
 
         if error:
             self.groups_status.setText(
@@ -822,7 +1046,10 @@ class SettingsDialog(QDialog):
         self._tabs.setCurrentIndex(0)
 
     def show_schedule_tab(self) -> None:
-        self._tabs.setCurrentIndex(3)
+        self._tabs.setCurrentIndex(2)
+
+    def show_modes_tab(self) -> None:
+        self._tabs.setCurrentIndex(1)
 
 
 def _escape(text: str) -> str:

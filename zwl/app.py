@@ -122,23 +122,11 @@ class WarningLightApp(QObject):
         self._enabled_action.toggled.connect(self._on_enabled_toggled)
         menu.addAction(self._enabled_action)
 
+        # Filled in _rebuild_mode_menu, because the user can add and rename modes.
         self._mode_menu = menu.addMenu("Mode")
-        self._mode_group = QActionGroup(self._mode_menu)
-        self._mode_group.setExclusive(True)
+        self._mode_group: QActionGroup | None = None
         self._mode_actions: dict[str, QAction] = {}
-        for value, text in (
-            (modes.HELPDESK, "Helpdesk Day"),
-            (modes.FOCUS, "Focus Day"),
-            (modes.SCHEDULE, "Schedule"),
-        ):
-            action = QAction(text, self._mode_menu, checkable=True)
-            action.setActionGroup(self._mode_group)
-            action.triggered.connect(
-                lambda _checked=False, m=value: self._on_mode_selected(m))
-            self._mode_menu.addAction(action)
-            self._mode_actions[value] = action
-        self._mode_menu.addSeparator()
-        self._mode_menu.addAction("Edit the weekly schedule…", self._open_schedule)
+        self._rebuild_mode_menu()
 
         pause_menu = menu.addMenu("Pause")
         for label, minutes in PAUSE_CHOICES:
@@ -165,9 +153,47 @@ class WarningLightApp(QObject):
         self._menu = menu
         self._tray.setContextMenu(menu)
 
+    def _rebuild_mode_menu(self) -> None:
+        """Rebuild the Mode submenu from the current mode list."""
+        self._mode_menu.clear()
+        self._mode_actions = {}
+        self._mode_group = QActionGroup(self._mode_menu)
+        self._mode_group.setExclusive(True)
+
+        entries = [(m.id, m.name) for m in self._config.day_modes]
+        entries.append((modes.OFF, modes.OFF_LABEL))
+        for value, text in entries:
+            action = QAction(text, self._mode_menu, checkable=True)
+            action.setActionGroup(self._mode_group)
+            action.triggered.connect(
+                lambda _checked=False, m=value: self._on_mode_selected(m))
+            self._mode_menu.addAction(action)
+            self._mode_actions[value] = action
+
+        self._mode_menu.addSeparator()
+        schedule_action = QAction("Follow the weekly schedule", self._mode_menu,
+                                  checkable=True)
+        schedule_action.setActionGroup(self._mode_group)
+        schedule_action.triggered.connect(
+            lambda _checked=False: self._on_mode_selected(modes.SCHEDULE))
+        self._mode_menu.addAction(schedule_action)
+        self._mode_actions[modes.SCHEDULE] = schedule_action
+
+        self._mode_menu.addSeparator()
+        self._mode_menu.addAction("Edit modes\u2026", self._open_modes)
+        self._mode_menu.addAction("Edit the weekly schedule\u2026", self._open_schedule)
+
     def _refresh_menu(self) -> None:
         needs_sign_in = not self._tokens.is_signed_in or not self._auth_ok
         self._sign_in_action.setVisible(needs_sign_in)
+
+        # Names and membership can change while the menu exists.
+        expected = [m.id for m in self._config.day_modes]
+        listed = [k for k in self._mode_actions if k not in (modes.SCHEDULE, modes.OFF)]
+        stale = sorted(expected) != sorted(listed) or any(
+            self._mode_actions[m.id].text() != m.name for m in self._config.day_modes)
+        if stale:
+            self._rebuild_mode_menu()
 
         self._mode_menu.setTitle("Mode: {}".format(self._config.mode_label()))
         for value, action in self._mode_actions.items():
@@ -317,19 +343,21 @@ class WarningLightApp(QObject):
                 icons.tray_icon(icons.IDLE), 5000)
 
     def _mode_summary(self) -> str:
-        effective = self._config.effective_mode()
-        if effective == modes.OFF:
+        active = self._config.active_mode()
+        if active is None:
             return ("Off Day - no warnings and no Zendesk calls until the next "
                     "working day.")
-        if effective == modes.FOCUS:
-            return ("Focus Day - only your own tickets reopening will interrupt "
-                    "you.")
-        return "Helpdesk Day - every rule you have ticked is live."
+        return "{} - warns about {}.".format(active.name, active.summary())
 
     def _open_schedule(self) -> None:
         self.open_settings()
         if self._settings_dialog is not None:
             self._settings_dialog.show_schedule_tab()
+
+    def _open_modes(self) -> None:
+        self.open_settings()
+        if self._settings_dialog is not None:
+            self._settings_dialog.show_modes_tab()
 
     def _pause_for(self, minutes: int) -> None:
         until = datetime.now(timezone.utc) + timedelta(minutes=int(minutes))
@@ -444,8 +472,10 @@ class WarningLightApp(QObject):
     def _on_settings_saved(self, cfg: Config) -> None:
         self._config = cfg
         self._last_error = ""
-        log.info("settings saved (groups=%s, poll=%ss)",
-                 cfg.watched_group_ids or "all", cfg.poll_seconds)
+        self._last_effective_mode = cfg.effective_mode()
+        self._rebuild_mode_menu()
+        log.info("settings saved (mode=%s, %d mode(s) defined, poll=%ss)",
+                 cfg.mode_label(), len(cfg.day_modes), cfg.poll_seconds)
         self._push_config()
         self.poll_requested.emit()
 

@@ -13,7 +13,9 @@ from PySide6.QtCore import QCoreApplication  # noqa: E402
 from zwl import auth as auth_module  # noqa: E402
 from zwl import monitor as monitor_module  # noqa: E402
 from zwl.auth import SignedInUser, TokenStore  # noqa: E402
+from zwl import modes  # noqa: E402
 from zwl.config import Config  # noqa: E402
+from zwl.modes import DayMode  # noqa: E402
 from zwl.monitor import (  # noqa: E402
     REASON_BECAME_UNASSIGNED, REASON_NEW_UNASSIGNED, REASON_PENDING_TO_OPEN, Monitor,
 )
@@ -52,7 +54,14 @@ def make_tokens(user_id: int = ME, role: str = "agent") -> TokenStore:
 
 
 def make_monitor(**overrides) -> Monitor:
-    cfg = Config(subdomain="example", watched_group_ids=[WATCHED])
+    """One mode named "test", carrying the rules and groups under test."""
+    mode = DayMode(id="test", name="Test mode", watched_group_ids=[WATCHED])
+    for key in ("alert_on_new_unassigned", "alert_on_became_unassigned",
+                "alert_on_pending_to_open", "watched_group_ids"):
+        if key in overrides:
+            setattr(mode, key, overrides.pop(key))
+    cfg = Config(subdomain="example", mode="test", day_modes=[mode],
+                 schedule={k: "test" for k in modes.WEEKDAY_KEYS})
     for key, value in overrides.items():
         setattr(cfg, key, value)
     mon = Monitor(cfg, make_tokens())

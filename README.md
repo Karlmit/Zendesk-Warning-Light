@@ -12,8 +12,9 @@ dismiss it; it also disappears on its own as soon as the underlying reason goes 
 | **Handed back to the queue** | An already-known ticket in a watched group loses its assignee | Same as above |
 | **Your ticket reopened** | A ticket assigned to *you* goes from `pending` back to `open` | It leaves `open`, or is reassigned away from you |
 
-Each rule can be switched off independently in **Settings → Alerts**. The reopen rule
-deliberately ignores the group filter — it is about your tickets wherever they live.
+Those three rules, and the groups they apply to, belong to a **mode** — see below.
+The reopen rule deliberately ignores the group selection: it is about your tickets
+wherever they live.
 
 Everyone signs in with their own Zendesk account, so the app only ever sees the tickets
 that person is allowed to see. Two people running it can legitimately get different
@@ -24,38 +25,53 @@ interrupt you today. A mode can only ever *narrow* what you ticked, never widen 
 
 ## Day modes
 
-Switch mode from the tray: **Mode › Helpdesk Day / Focus Day / Schedule**. The tray
-menu title always shows what is in force, e.g. `Mode: Schedule → Off Day`.
+A **mode** is a named bundle of *what may interrupt me* and *which groups that applies
+to*. Switch mode from the tray — **Mode › …** — and the submenu title always names the
+one in force, e.g. `Mode: Schedule → Switchboard morning`.
 
-| Mode | What fires | Zendesk polled? |
+Because each mode carries its own group selection, you can watch the switchboard queue
+on Mondays and only billing on Thursdays, without touching anything else.
+
+You start with two modes, and they are ordinary editable modes — rename, retune or
+delete them like any other:
+
+| Mode | Rules | Groups |
 |---|---|---|
-| **Helpdesk Day** | Every rule you have ticked: new unassigned tickets, hand-backs, and your own reopens | Yes |
-| **Focus Day** | Only **your own tickets reopening**. Queue tickets stay silent because someone else is covering | Yes |
-| **Off Day** | Nothing | **No — no API calls at all** |
+| **Helpdesk Day** *(default after install)* | All three | Whatever you pick |
+| **Focus Day** | Reopen only — the queue stays quiet while someone else covers it | Not used |
 
-**Helpdesk Day is the default** after installation.
+**Off Day** is the one reserved mode. It has nothing to configure: it fires nothing and
+makes **no Zendesk API calls at all**. Because the app deliberately lets its ticket
+history go stale while off, the next working day begins with a silent catch-up rather
+than a wall of alerts for everything that happened while you were away.
 
-**Focus Day** still polls, so the moment the day ends nothing has been missed — the app
-already knows the current state of every ticket and simply stops suppressing the queue
-rules.
+### Making your own
 
-**Off Day** is genuinely idle: no requests are made, so it costs nothing against your
-Zendesk rate limit. Because the app deliberately lets its ticket history go stale while
-off, the next working day begins with a silent catch-up rather than a wall of alerts for
-everything that happened while you were away.
+**Settings → Modes** edits one mode at a time: pick it from the dropdown, set its rules,
+tick its groups. **New**, **Duplicate**, **Rename** and **Delete** are alongside.
+
+- A new mode starts from your own group memberships, which is a far better default than
+  every group in the account.
+- If a mode has neither queue rule ticked, the group list is greyed out and says why —
+  the reopen rule is not tied to a group, so there would be nothing for it to do.
+- A line at the bottom summarises the mode in plain words, e.g.
+  *"Switchboard morning warns about the queue in 1 group + my reopened tickets"*, and
+  tells you when that mode is the one currently in force.
+- Deleting a mode that a weekday points at reassigns that day rather than breaking it,
+  and says so before you confirm.
 
 ### Schedule mode
 
-Pick **Schedule** and the app follows a weekly plan you set in
-**Settings → Schedule**: each of Monday to Sunday is a Helpdesk, Focus or Off day. The
-default plan is Monday to Friday on the queue, Saturday and Sunday off.
+Pick **Follow the weekly schedule** on the **Schedule** tab and each of Monday to Sunday
+gets its own mode — any of yours, or Off. The default plan is Monday to Friday on
+Helpdesk Day, Saturday and Sunday off.
 
-The Schedule tab shows what today resolves to as you edit it, and the same tab explains
-what each mode means. Midnight rollover is handled while the app is running — Friday's
-Helpdesk Day becomes Saturday's Off Day without a restart.
+The tab shows what today resolves to as you edit it. Midnight rollover is handled while
+the app runs, so Friday's mode becomes Saturday's without a restart.
 
-Changing mode takes effect immediately. If a warning is showing that the new mode no
-longer permits, it is dismissed rather than left stranded on screen.
+Changing mode takes effect immediately. A warning the new mode no longer permits —
+including one for a group the new mode does not watch — is dismissed rather than left
+stranded on screen.
 
 ## Installing
 
@@ -146,9 +162,10 @@ On first launch the Settings window opens on the **Connection** tab.
 1. Press **Sign in with Zendesk**. Your browser opens, you sign in the way you normally
    do — including Microsoft SSO and MFA — and approve the app. Nothing is typed into
    the app itself.
-2. **Groups** – the list loads automatically, pre-ticked with your own groups. Adjust it
-   if you want. *Nothing ticked means every group you can see.*
-3. **Schedule** – optional. Leave it on *Always a Helpdesk Day*, or set a weekly plan.
+2. **Modes** – the group list loads automatically, pre-ticked with your own groups.
+   Adjust the rules and groups for each mode. *Nothing ticked means every group you
+   can see.*
+3. **Schedule** – optional. Leave it on one mode every day, or set a weekly plan.
 4. **Appearance** – pick the animation, size, screen and corner. **Preview** shows it for
    four seconds without waiting for a real ticket.
 
@@ -157,8 +174,8 @@ are, so the reopen rule configures itself.
 
 ### Which groups you can pick
 
-The Groups list depends on what your Zendesk role allows, because `/groups.json` returns
-every group in the account regardless of who asks:
+The group list on the Modes tab depends on what your Zendesk role allows, because
+`/groups.json` returns every group in the account regardless of who asks:
 
 - **If your role can see all tickets**, every group is listed. Groups you are not a
   member of are greyed out but still selectable — they work for you.
@@ -179,8 +196,9 @@ Zendesk account is enough; there is no shared secret to rotate.
 ## Tray menu
 
 - **Enabled** – master on/off switch, remembered across restarts.
-- **Mode** – Helpdesk Day, Focus Day, or Schedule, plus a shortcut to edit the weekly
-  plan. The submenu title names the mode currently in force.
+- **Mode** – every mode you have defined, plus Off Day and *Follow the weekly
+  schedule*, with shortcuts to edit modes or the plan. The submenu title names the
+  mode currently in force.
 - **Pause** – 30 minutes, 1 hour, 4 hours, or the rest of today. The tray icon greys out
   and the tooltip tells you when it comes back. Pauses survive a restart and expire on
   their own.
@@ -314,7 +332,7 @@ main.py                 entry point
 zwl/app.py              tray icon, menus, wiring
 zwl/auth.py             sign-in (PKCE), token store, rotating refresh
 zwl/monitor.py          polling loop and the transition rules
-zwl/modes.py            day modes, the rule mask and the weekday plan
+zwl/modes.py            the DayMode type, seeding/repair and the weekday plan
 zwl/sources.py          the two ticket sources and how one is chosen
 zwl/zendesk.py          REST client, authenticated as the signed-in user
 zwl/overlay.py          the always-on-top animated window
@@ -326,7 +344,8 @@ zwl/autostart.py        Windows Run-key registration
 assets/                 bundled animations and the generated app.ico
 tests/test_rules.py     transition rules, no network needed
 tests/test_sources.py   ticket sources and their selection, no network needed
-tests/test_modes.py     day modes, the rule mask and the off-day silence
+tests/test_modes.py     modes, per-mode groups and the off-day silence
+tests/test_groups_tab.py the group picker, including per-mode independence
 tools/make_icon.py      generates assets/app.ico for the build
 tools/verify_oauth.py   standalone sign-in check, safe to hand to a colleague
 
@@ -337,8 +356,12 @@ installer/uninstall.ps1 reverses install.ps1
 ```
 
 Settings, tokens, state and logs live in `%APPDATA%\ZendeskWarningLight\`:
-`config.json` (no credentials), `tokens.json` (DPAPI-encrypted refresh token),
-`state.json` (ticket history) and `warning-light.log`.
+`config.json` (no credentials — holds your modes and weekly plan), `tokens.json`
+(DPAPI-encrypted refresh token), `state.json` (ticket history) and
+`warning-light.log`.
+
+Upgrading from 2.1 folds the old single set of rules and groups into the two seeded
+modes, so behaviour carries over untouched.
 
 ## Troubleshooting
 
@@ -357,7 +380,8 @@ For anything else, start with the log — **Settings → General → Open log fi
 | "Zendesk sign-in expired" | Tray menu → **Sign in to Zendesk…**. Happens after ~30 days of not running the app |
 | Sign-in never completes | Ports 47821-47823 all busy, or a redirect URL missing from the OAuth client |
 | Nothing ever fires | Check the tray tooltip — it names the mode. An Off Day is silent by design, and a Focus Day only allows your own reopens |
-| Queue alerts stopped but reopens still work | You are on a Focus Day. Tray › Mode › Helpdesk Day |
+| Queue alerts stopped but reopens still work | The mode in force has no queue rule (Focus Day does not). Tray › Mode |
+| A group I ticked never fires | Check you ticked it on the *mode* that is in force — each mode has its own group list |
 | No Zendesk traffic at all | An Off Day makes no API calls. Tray › Mode, or edit Settings → Schedule |
 | Too many alerts | Groups tab is empty, so it is watching every group |
 | Reopen rule never fires | Not signed in — the rule needs to know who you are |
