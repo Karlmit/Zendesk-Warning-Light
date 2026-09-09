@@ -205,6 +205,25 @@ class TokenStore:
         if rotated:
             self._refresh_token = rotated       # the old one is now dead
 
+    def _adopt_rotated_token_locked(self, already_tried: str) -> bool:
+        """Re-read tokens.json; adopt a refresh token newer than the one that failed.
+
+        Caller must hold the lock. Returns True when a different token was found.
+        """
+        path = tokens_path()
+        if not path.exists():
+            return False
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            log.warning("could not re-read %s while recovering a refresh", path)
+            return False
+        stored = keystore.decrypt(data.get("refresh_token_enc", ""))
+        if not stored or stored == already_tried:
+            return False
+        self._refresh_token = stored
+        return True
+
     # --- getting a usable token ---------------------------------------- #
 
     def access_token(self, force_refresh: bool = False) -> str:
@@ -220,15 +239,16 @@ class TokenStore:
             self._refresh_locked()
             return self._access_token
 
-    def _refresh_locked(self) -> None:
+    def _refresh_locked(self, allow_reload: bool = True) -> None:
         log.info("refreshing the Zendesk access token")
+        attempted = self._refresh_token
         try:
             resp = requests.post(
                 self.base_url.rstrip("/") + TOKEN_PATH,
                 json={
                     "grant_type": "refresh_token",
                     "client_id": self.client_id,
-                    "refresh_token": self._refresh_token,
+                    "refresh_token": attempted,
                 },
                 timeout=REQUEST_TIMEOUT,
             )
@@ -237,6 +257,14 @@ class TokenStore:
             raise AuthError("Could not reach Zendesk to refresh the token: {}".format(exc)) from exc
 
         if resp.status_code in (400, 401, 403):
+            # Refresh tokens rotate, so another process that refreshed against the
+            # same tokens.json has already invalidated the copy we just tried. Before
+            # declaring the sign-in dead, re-read the file: if it now holds a newer
+            # token, adopt that and try once more.
+            if allow_reload and self._adopt_rotated_token_locked(attempted):
+                log.info("another process had rotated the refresh token; retrying")
+                self._refresh_locked(allow_reload=False)
+                return
             self._refresh_token = ""
             self._access_token = ""
             self._expires_at = 0.0

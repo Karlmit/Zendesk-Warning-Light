@@ -110,17 +110,40 @@ class ZendeskClient:
         out.sort(key=lambda g: (g.get("name") or "").lower())
         return out
 
-    def my_groups(self, user_id: int) -> list[dict[str, Any]] | None:
-        """Groups this user belongs to, or None if Zendesk will not say."""
-        try:
-            data = self.get("/api/v2/users/{}/groups.json".format(int(user_id)),
-                            {"per_page": 100})
-        except ZendeskError:
-            log.warning("could not read own group memberships", exc_info=True)
-            return None
-        groups = [g for g in data.get("groups", []) if not g.get("deleted")]
-        groups.sort(key=lambda g: (g.get("name") or "").lower())
-        return groups
+    def my_group_ids(self, user_id: int) -> set[int] | None:
+        """IDs of the groups this user belongs to, or None if we cannot tell.
+
+        Three endpoints are tried because what a non-admin agent may read varies:
+        the convenience endpoint sometimes answers 200 with an empty list even for
+        an agent who demonstrably has memberships. ``None`` means "unknown" and is
+        emphatically *not* the same as "belongs to nothing" - callers must not use
+        it to narrow a list down to nothing.
+        """
+        uid = int(user_id)
+        attempts = (
+            ("/api/v2/users/{}/groups.json".format(uid),
+             lambda d: {int(g["id"]) for g in d.get("groups", []) if not g.get("deleted")}),
+            ("/api/v2/users/{}/group_memberships.json".format(uid),
+             lambda d: {int(m["group_id"]) for m in d.get("group_memberships", [])}),
+            ("/api/v2/group_memberships.json",
+             lambda d: {int(m["group_id"]) for m in d.get("group_memberships", [])
+                        if int(m.get("user_id", 0)) == uid}),
+        )
+        for path, extract in attempts:
+            try:
+                ids = extract(self.get(path, {"per_page": 100}))
+            except ZendeskError as exc:
+                log.warning("%s unreadable: %s", path, exc)
+                continue
+            except (KeyError, TypeError, ValueError):
+                log.warning("%s returned an unexpected shape", path, exc_info=True)
+                continue
+            if ids:
+                log.info("resolved %d group membership(s) via %s", len(ids), path)
+                return ids
+            log.info("%s returned no memberships; trying the next endpoint", path)
+        log.warning("could not determine group membership for user %s", uid)
+        return None
 
     def incremental_tickets(self, cursor: str | None = None,
                             start_time: int | None = None

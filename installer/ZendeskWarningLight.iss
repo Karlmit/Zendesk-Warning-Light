@@ -9,7 +9,7 @@
 #define AppId        "ZendeskWarningLight"
 #define AppPublisher "Karl Almqvist"
 #define AppExe       "ZendeskWarningLight.exe"
-#define AppVersion   "2.1.0"
+#define AppVersion   "2.1.1"
 
 [Setup]
 AppId={{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}

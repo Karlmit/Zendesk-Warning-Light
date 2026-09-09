@@ -201,30 +201,48 @@ def check_capabilities(base: str, access_token: str) -> None:
         "  -> group list should be limited to their own groups" if restricted
         else "  -> sees all tickets, whole group list is usable"))
 
-    # The Settings dialog builds its group checklist from /groups.json, which is NOT
-    # filtered by membership. Report both counts so we know how far apart they are
-    # for a non-admin, and whether an agent may read their own memberships at all.
-    all_groups = requests.get(base + "/api/v2/groups.json",
-                              headers=headers, params={"per_page": 100}, timeout=30)
-    my_groups = requests.get(base + "/api/v2/users/{}/groups.json".format(user["id"]),
-                             headers=headers, timeout=30)
+    # The Settings dialog builds its checklist from /groups.json and pre-ticks using
+    # one of three membership endpoints. Report the status of every one, because a
+    # plain agent account came up with an empty group list and only the status codes
+    # say which call is the problem.
+    uid = user["id"]
+    endpoints = (
+        ("all groups", "/api/v2/groups.json", "groups", None),
+        ("my groups", "/api/v2/users/{}/groups.json".format(uid), "groups", None),
+        ("my memberships", "/api/v2/users/{}/group_memberships.json".format(uid),
+         "group_memberships", None),
+        ("all memberships", "/api/v2/group_memberships.json", "group_memberships", uid),
+    )
 
-    if all_groups.ok:
-        total = [g for g in all_groups.json().get("groups", []) if not g.get("deleted")]
-        print("   groups in account : {} (what the Settings list would show)".format(len(total)))
-    else:
-        total = []
-        print("   groups in account : FAILED {}".format(all_groups.status_code))
+    total: list[dict] = []
+    mine_ids: set = set()
+    print("\n   group endpoints (the app tries these in order):")
+    for label, path, key, filter_uid in endpoints:
+        resp = requests.get(base + path, headers=headers,
+                            params={"per_page": 100}, timeout=30)
+        if not resp.ok:
+            print("     {:<16} HTTP {}  <-- REFUSED  {}".format(
+                label, resp.status_code, resp.text[:70].replace("\n", " ")))
+            continue
+        rows = resp.json().get(key) or []
+        if filter_uid is not None:
+            rows = [r for r in rows if int(r.get("user_id", 0)) == int(filter_uid)]
+        print("     {:<16} HTTP {}  -> {} row(s)".format(label, resp.status_code, len(rows)))
+        if label == "all groups":
+            total = [g for g in rows if not g.get("deleted")]
+        elif not mine_ids:
+            mine_ids = {int(r["id"] if "id" in r and key == "groups" else r["group_id"])
+                        for r in rows}
 
-    if my_groups.ok:
-        mine = my_groups.json().get("groups", [])
-        print("   groups I am in    : {}".format(len(mine)))
-        mine_ids = {g["id"] for g in mine}
-        for g in sorted(total, key=lambda g: g.get("name", "").lower()):
-            print("      [{}] {}".format("x" if g["id"] in mine_ids else " ", g.get("name")))
+    if not total:
+        print("\n     The Settings group list would be EMPTY. Leaving every group"
+              "\n     unticked still works - it then watches whatever you can see.")
     else:
-        print("   groups I am in    : FAILED {} - agents may not read their own "
-              "memberships, so the list cannot be pre-filtered".format(my_groups.status_code))
+        print("\n   what the Settings list would show ({} groups, {} pre-ticked):".format(
+            len(total), len(mine_ids)))
+        for g in sorted(total, key=lambda g: (g.get("name") or "").lower()):
+            print("      [{}] {}".format("x" if int(g["id"]) in mine_ids else " ",
+                                         g.get("name")))
 
     print("\n   ticket sources:")
     inc = requests.get(

@@ -70,7 +70,8 @@ class SettingsDialog(QDialog):
         self._tokens = tokens
         self._groups: list[dict[str, Any]] = []
         self._my_group_ids: set[int] | None = None
-        self._thread: _CallThread | None = None
+        self._threads: set[_CallThread] = set()
+        self._busy: set[str] = set()
 
         self.setWindowTitle("Zendesk Warning Light – Settings")
         self.setMinimumWidth(600)
@@ -515,10 +516,23 @@ class SettingsDialog(QDialog):
                 self.group_list.addItem(item)
             return
 
-        if restricted:
+        # Narrow to the user's own groups only when we actually know them. An
+        # unknown or empty membership set used to filter the list down to nothing,
+        # which left the tab blank with no explanation.
+        narrow = restricted and bool(self._my_group_ids)
+
+        if narrow:
             self.groups_hint.setText(
                 "Your Zendesk role limits you to tickets in your own groups, so only "
                 "those are listed. With nothing ticked, all of them are watched."
+            )
+        elif restricted:
+            self.groups_hint.setText(
+                "Your Zendesk role limits you to tickets in your own groups, but "
+                "Zendesk would not confirm which, so every group is listed. Ticking "
+                "one you are not in simply never fires. <b>Leaving everything "
+                "unticked is the safe choice</b> \u2014 it watches exactly the tickets "
+                "you can see."
             )
         else:
             self.groups_hint.setText(
@@ -527,11 +541,8 @@ class SettingsDialog(QDialog):
                 "for you because your role can see all tickets."
             )
 
-        shown = [
-            g for g in self._groups
-            if not restricted or self._my_group_ids is None
-            or int(g["id"]) in self._my_group_ids
-        ]
+        shown = [g for g in self._groups
+                 if not narrow or int(g["id"]) in self._my_group_ids]
         for group in shown:
             group_id = int(group["id"])
             item = QListWidgetItem(group.get("name") or "(unnamed)")
@@ -600,18 +611,28 @@ class SettingsDialog(QDialog):
     # actions
     # ------------------------------------------------------------------ #
 
-    def _run_async(self, fn: Callable[[], Any], on_ok: Callable[[Any], None],
-                   buttons: list[QPushButton]) -> None:
-        if self._thread is not None and self._thread.isRunning():
-            QMessageBox.information(self, "Busy",
-                                    "Another Zendesk request is still running.")
+    def _run_async(self, key: str, fn: Callable[[], Any],
+                   on_ok: Callable[[Any], None], buttons: list[QPushButton]) -> None:
+        """Run ``fn`` off the UI thread.
+
+        Keyed per operation rather than globally. Signing in and loading groups are
+        independent, and one shared busy flag meant the group load fired straight
+        after a sign-in could be refused while the sign-in thread was still winding
+        down - leaving a brand new install with an empty group list.
+        """
+        if key in self._busy:
+            log.info("ignoring a duplicate %r request", key)
             return
+        self._busy.add(key)
         for button in buttons:
             button.setEnabled(False)
 
         thread = _CallThread(fn, self)
+        self._threads.add(thread)
 
         def finish() -> None:
+            self._busy.discard(key)
+            self._threads.discard(thread)
             for button in buttons:
                 button.setEnabled(True)
             self._refresh_account_state()
@@ -620,7 +641,6 @@ class SettingsDialog(QDialog):
         thread.succeeded.connect(lambda _=None: finish())
         thread.failed.connect(lambda msg: (finish(), self._show_error(msg)))
         thread.finished.connect(thread.deleteLater)
-        self._thread = thread
         thread.start()
 
     def _show_error(self, message: str) -> None:
@@ -645,6 +665,7 @@ class SettingsDialog(QDialog):
 
         self.account_label.setText("Waiting for you to finish signing in in the browser…")
         self._run_async(
+            "sign-in",
             lambda: self._tokens.sign_in(base_url, client_id),
             self._on_signed_in,
             [self.sign_in_button, self.sign_out_button],
@@ -691,16 +712,26 @@ class SettingsDialog(QDialog):
         user_id = self._tokens.user.id
 
         def fetch() -> dict[str, Any]:
-            return {"all": client.groups(),
-                    "mine": client.my_groups(user_id) if user_id else None}
+            # Report a refusal rather than raising, so the tab can explain itself
+            # instead of showing a modal over a blank list.
+            payload: dict[str, Any] = {"all": [], "mine": None, "error": ""}
+            try:
+                payload["all"] = client.groups()
+            except ZendeskError as exc:
+                payload["error"] = str(exc)
+                log.warning("could not list groups: %s", exc)
+            if user_id:
+                payload["mine"] = client.my_group_ids(user_id)
+            return payload
 
-        self._run_async(fetch, self._on_groups_loaded,
+        self._run_async("groups", fetch, self._on_groups_loaded,
                         [self.load_groups_button, self.only_mine_button])
 
     def _on_groups_loaded(self, payload: dict[str, Any]) -> None:
         self._groups = payload.get("all") or []
         mine = payload.get("mine")
-        self._my_group_ids = {int(g["id"]) for g in mine} if mine is not None else None
+        self._my_group_ids = set(mine) if mine else None
+        error = payload.get("error") or ""
 
         # First run: default to the user's own groups rather than "everything".
         if not self._config.watched_group_ids and self._my_group_ids:
@@ -709,10 +740,17 @@ class SettingsDialog(QDialog):
                      len(self._my_group_ids))
 
         self._render_groups()
-        if self._my_group_ids is None:
+
+        if error:
             self.groups_status.setText(
-                "{} groups in the account. Zendesk would not say which ones you belong "
-                "to, so none are marked.".format(len(self._groups)))
+                "<span style='color:#c62828'>Zendesk would not list the groups.</span> "
+                "Leaving everything unticked still works \u2014 the app then watches "
+                "every group your account can see.<br>"
+                "<span style='color:#888'>{}</span>".format(_escape(error[:220])))
+        elif self._my_group_ids is None:
+            self.groups_status.setText(
+                "{} groups in the account. Zendesk would not say which ones you "
+                "belong to, so nothing is pre-ticked.".format(len(self._groups)))
         else:
             self.groups_status.setText(
                 "{} groups in the account; you are a member of {}.".format(
