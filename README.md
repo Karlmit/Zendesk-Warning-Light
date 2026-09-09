@@ -14,6 +14,14 @@ Zendesk sign-in, pause options, and the cat.
 > shared logic is covered by the same 128 automated checks as the Windows build, and
 > `tools/preflight.py` verifies the macOS-specific layer in one command. Run that first.
 
+## Start here
+
+**[INSTALL.md](INSTALL.md)** is the step-by-step guide: what you need, how to build it,
+how to install it, and a ready-to-paste message for colleagues receiving the `.dmg`.
+
+This file is the reference — architecture, how it differs from the Windows build, and
+known limitations.
+
 ## Requirements
 
 | | |

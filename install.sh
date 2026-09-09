@@ -40,6 +40,14 @@ die()  { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 
 [[ "$(uname -s)" == "Darwin" ]] || die "macOS only."
 
+# Running this under sudo would write the login item into root's home and leave
+# root-owned files in your Applications folder, so the app would never start at
+# login and you could not update it without sudo again.
+if [[ "$(id -u)" == "0" ]]; then
+  die "Do not run this with sudo - it installs for one user.
+Run it as yourself; the default target (~/Applications) needs no admin rights."
+fi
+
 # --- 1. make sure there is something to install ----------------------------
 
 BUILT="dist/$APP_NAME.app"
