@@ -1,0 +1,12 @@
+# Authored on Windows, run on macOS: a CRLF in a shell script makes the shebang
+# "/usr/bin/env bash\r", which macOS reports as "bad interpreter". Pin every text
+# file to LF so a checkout on either OS produces something a Mac can execute.
+* text=auto eol=lf
+
+# Never touch binaries.
+*.gif  binary
+*.webp binary
+*.png  binary
+*.icns binary
+*.ico  binary
+*.dmg  binary
