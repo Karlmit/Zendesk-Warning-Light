@@ -59,7 +59,7 @@ longer permits, it is dismissed rather than left stranded on screen.
 
 ## Installing
 
-Run **`dist\ZendeskWarningLight-Setup.exe`** and click through the wizard. It installs
+Run **`dist\ZendeskWarningLight-Setup-<version>.exe`** and click through the wizard. It installs
 per-user into `%LOCALAPPDATA%\Programs\ZendeskWarningLight`, so there is **no UAC prompt
 and no administrator rights needed**. The wizard offers two checkboxes — start with
 Windows (on by default) and a desktop shortcut (off by default) — then registers the app
@@ -74,7 +74,7 @@ Switches can be combined freely. Setup returns exit code **0** on success and no
 failure, so it is safe to script.
 
 ```bat
-ZendeskWarningLight-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+ZendeskWarningLight-Setup-2.1.1.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ```
 
 | Switch | Effect |
@@ -125,7 +125,7 @@ app and later upgrade, pass `/NOAUTOSTART` (or untick the wizard box) to keep it
 ### Building it yourself
 
 ```bash
-.\build.ps1 -Installer   # app + dist\ZendeskWarningLight-Setup.exe
+.\build.ps1 -Installer   # app + dist\ZendeskWarningLight-Setup-<version>.exe
 .\build.ps1              # app only -> dist\ZendeskWarningLight\
 .\build.ps1 -OneFile     # single self-contained app exe (slower to start)
 ```
@@ -171,7 +171,7 @@ the app which groups you belong to, it says so rather than guessing.
 
 ## Sharing it with colleagues
 
-Hand them `ZendeskWarningLight-Setup.exe`. There is nothing to configure and no
+Hand them `ZendeskWarningLight-Setup-<version>.exe`. There is nothing to configure and no
 credential to pass around — the app ships only the OAuth client *identifier*, which is
 not sensitive, and each person signs in as themselves. If someone leaves, revoking their
 Zendesk account is enough; there is no shared secret to rotate.

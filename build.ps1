@@ -36,9 +36,17 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 & $python tools\make_icon.py
 Remove-Item Env:\QT_QPA_PLATFORM
 
+# Read the single source of truth for the version, and build the resource that
+# stamps it onto the exe so Windows Properties and inventory tools can see it.
+$appVersion = (Select-String -Path zwl\__init__.py -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+$versionFile = Join-Path $PSScriptRoot 'build\version_info.txt'
+Write-Host "Stamping version $appVersion..." -ForegroundColor Cyan
+& $python tools\make_version_file.py $versionFile
+
 if ($Clean) {
     Write-Host 'Cleaning previous build output...' -ForegroundColor Cyan
     Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
+    & $python tools\make_version_file.py $versionFile   # build\ was just deleted
 }
 
 $pyiArgs = @(
@@ -46,6 +54,7 @@ $pyiArgs = @(
     '--windowed'                       # no console window
     '--name', 'ZendeskWarningLight'
     '--icon', 'assets\app.ico'
+    '--version-file', $versionFile
     '--add-data', 'assets;assets'
     '--exclude-module', 'tkinter'
     '--exclude-module', 'PySide6.QtWebEngineCore'
@@ -67,8 +76,9 @@ $exe = if ($OneFile) {
 
 if (Test-Path $exe) {
     $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+    $stamped = (Get-Item $exe).VersionInfo.FileVersion
     Write-Host ''
-    Write-Host "Build complete: $exe ($size MB)" -ForegroundColor Green
+    Write-Host "Build complete: $exe ($size MB, version $stamped)" -ForegroundColor Green
 } else {
     throw "PyInstaller finished but $exe is missing."
 }
@@ -83,7 +93,15 @@ if ($Installer) {
     if ($iscc) {
         Write-Host 'Compiling the setup wizard...' -ForegroundColor Cyan
         & $iscc 'installer\ZendeskWarningLight.iss'
-        Write-Host "Setup wizard: $PSScriptRoot\dist\ZendeskWarningLight-Setup.exe" -ForegroundColor Green
+        $setup = Join-Path $PSScriptRoot "dist\ZendeskWarningLight-Setup-$appVersion.exe"
+        if (Test-Path $setup) {
+            $setupMb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+            Write-Host ''
+            Write-Host "Give this file to colleagues:" -ForegroundColor Green
+            Write-Host "  $setup  ($setupMb MB)" -ForegroundColor Green
+        } else {
+            throw "ISCC finished but $setup is missing."
+        }
     } else {
         Write-Warning 'Inno Setup 6 is not installed, so no setup wizard was built.'
         Write-Host 'Install it from https://jrsoftware.org/isdl.php, or just run .\install.ps1 -' -ForegroundColor DarkGray

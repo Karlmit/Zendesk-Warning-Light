@@ -30,7 +30,9 @@ DisableDirPage=auto
 AllowNoIcons=yes
 
 OutputDir=..\dist
-OutputBaseFilename={#AppId}-Setup
+; Version in the filename, so a colleague can tell what they were sent and
+; two releases never silently overwrite one another.
+OutputBaseFilename={#AppId}-Setup-{#AppVersion}
 SetupIconFile=..\assets\app.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
