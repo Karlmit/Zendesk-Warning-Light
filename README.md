@@ -111,7 +111,7 @@ Inno's own switches work too, and take precedence when you want to be explicit:
 | `/DESKTOPICON` | Also create a desktop shortcut |
 | `/NOLAUNCH` | Do not start the app after installing |
 | `/DIR="C:\path"` | Install somewhere else |
-| `/LOG="C:ile.log"` | Write an install log |
+| `/LOG="C:\file.log"` | Write an install log |
 | `/NORESTART` | Never reboot |
 
 Every switch is absolute: the result never depends on what a previous install chose.
@@ -164,31 +164,40 @@ point `IntuneWinAppUtil` at that folder and be done:
 
 ```
 dist\
-  ZendeskWarningLight-Setup-2.3.0.exe
+  ZendeskWarningLight-Setup-2.4.0.exe
   Intune-Install.cmd
   Intune-Uninstall.cmd
 ```
 
-**`Intune-Install.cmd` picks the mode from the account running it** — SYSTEM gets
-`/ALLUSERS`, anyone else gets `/CURRENTUSER` — by checking for the well-known SYSTEM SID
-`S-1-5-18`. Inno cannot make that choice itself, so it has to be made before Setup starts.
-The wrapper exits with Setup's own exit code, so Intune reports success and failure
-correctly.
+Since 2.4.0 the setup exe does the same job on its own, so the wrappers are a
+convenience rather than a requirement — use whichever suits the tool:
+
+```bat
+ZendeskWarningLight-Setup-2.4.0.exe /S
+ZendeskWarningLight-Setup-2.4.0.exe /S /uninstall
+```
+
+Both the wrapper and `/S` pick the install mode from the account running them — SYSTEM
+gets `/ALLUSERS`, anyone else `/CURRENTUSER` — and both exit with the installer's own
+exit code, so Intune reports success and failure correctly. The wrapper still has one
+advantage on uninstall: nothing else to ship alongside it if you would rather not carry
+the 35 MB setup exe just to remove something.
 
 | Intune field | Value |
 |---|---|
-| Install command | `Intune-Install.cmd` |
-| Uninstall command | `Intune-Uninstall.cmd` |
+| Install command | `Intune-Install.cmd` — or `ZendeskWarningLight-Setup-2.4.0.exe /S` |
+| Uninstall command | `Intune-Uninstall.cmd` — or `ZendeskWarningLight-Setup-2.4.0.exe /S /uninstall` |
 | Install behaviour | **System** for all users, **User** for per-user |
 | Device restart behaviour | No specific action |
 
 Add `/LOG="%TEMP%\zwl-install.log"` to the install command if you want a trace; anything
-you pass to the wrapper is forwarded to Setup.
+you pass to the wrapper is forwarded to Setup. The launcher writes that file and the
+install itself writes `zwl-install.log.install.log` beside it.
 
-Prefer the explicit switches over the wrapper if you would rather be unambiguous:
+Prefer the explicit switches over either if you would rather be unambiguous:
 
 ```bat
-ZendeskWarningLight-Setup-2.3.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
+ZendeskWarningLight-Setup-2.4.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Detection rules
@@ -200,7 +209,7 @@ Either works. The registry rule is the one Patch My PC-style version comparison 
 ```
 Key    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}_is1
 Value  DisplayVersion
-Rule   Version comparison, greater than or equal to, 2.3.0
+Rule   Version comparison, greater than or equal to, 2.4.0
 ```
 
 For a per-user deployment the same key sits under `HKEY_CURRENT_USER`.
@@ -210,7 +219,7 @@ For a per-user deployment the same key sits under `HKEY_CURRENT_USER`.
 ```
 Path     C:\Program Files\ZendeskWarningLight
 File     ZendeskWarningLight.exe
-Rule     Version, greater than or equal to, 2.3.0
+Rule     Version, greater than or equal to, 2.4.0
 ```
 
 Per-user: `%LOCALAPPDATA%\Programs\ZendeskWarningLight`.
@@ -238,10 +247,10 @@ single source of truth in `zwl/__init__.py`:
 
 | Location | Field | Value |
 |---|---|---|
-| Add/Remove Programs | `DisplayVersion` | `2.3.0` |
+| Add/Remove Programs | `DisplayVersion` | `2.4.0` |
 | | `DisplayName`, `Publisher`, `InstallLocation`, `DisplayIcon`, `UninstallString`, `QuietUninstallString`, `EstimatedSize`, `VersionMajor`, `VersionMinor` | all populated |
-| `ZendeskWarningLight.exe` | `FileVersion` / `ProductVersion` | `2.3.0` |
-| `…-Setup-2.3.0.exe` | `FileVersion` / `ProductVersion` | `2.3.0` |
+| `ZendeskWarningLight.exe` | `FileVersion` / `ProductVersion` | `2.4.0` |
+| `…-Setup-2.4.0.exe` | `FileVersion` / `ProductVersion` | `2.4.0` |
 
 So a tool that compares either the ARP `DisplayVersion` or the installed exe's file
 version will see the real version and detect an upgrade normally. The version also appears
@@ -252,22 +261,24 @@ in the installer's filename.
 **Settings → Apps → Installed apps → Zendesk Warning Light → Uninstall**, the Start-menu
 shortcut, or from a command line.
 
-> **The installer cannot uninstall.** Inno builds a *separate* `unins000.exe` at install
-> time, and it silently ignores switches it does not know — so
-> `Setup.exe /VERYSILENT /UNINSTALL` used to **install the app and exit 0**, meaning a
-> patching tool configured that way would reinstall on every uninstall attempt and report
-> success. `Setup.exe` now refuses `/UNINSTALL`, `/U` and `/REMOVE` outright, in silent
-> mode too, with exit code 1 and the reason in the log.
-
-For Intune, Patch My PC, ConfigMgr or anything else that takes a command line, use the
-wrapper — it finds whichever install is present and, importantly, waits for the removal
-to actually finish:
+For Intune, Patch My PC, ConfigMgr or anything else that takes a command line, either of
+these finds whichever install is present — machine-wide or per-user — and, importantly,
+waits for the removal to actually finish:
 
 ```bat
+ZendeskWarningLight-Setup-2.4.0.exe /S /uninstall
 Intune-Uninstall.cmd
 ```
 
-(The name says Intune, but it is tool-agnostic — plain `cmd` with correct exit codes.)
+Both are idempotent: removing something already gone exits 0 rather than failing. (The
+wrapper's name says Intune, but it is tool-agnostic — plain `cmd` with correct exit codes.)
+
+> **An installer normally cannot uninstall**, which is why this needed building. Inno
+> writes a *separate* `unins000.exe` at install time and silently ignores switches it does
+> not know — so `Setup.exe /VERYSILENT /UNINSTALL` once **installed the app and exited 0**,
+> meaning a patching tool configured that way would reinstall on every uninstall attempt
+> and report success. The launcher now runs the real uninstaller instead. The payload
+> inside still refuses those switches outright, in case anyone runs it directly.
 
 The explicit commands, if you prefer them:
 
@@ -283,14 +294,14 @@ Both paths are also recorded in the registry as `UninstallString` and
 `QuietUninstallString` under the uninstall key, so a management tool can read them rather
 than assume a path.
 
-> **Why the wrapper rather than `unins000.exe` directly?** Inno's uninstaller copies itself
+> **Why not call `unins000.exe` directly?** Inno's uninstaller copies itself
 > to `%TEMP%` and lets that copy finish the job, so it can delete its own folder. The
 > process you launched therefore **returns exit code 0 while the program folder is still on
 > disk** — measured here at about three seconds' lag. Intune evaluates its detection rule as
 > soon as the command returns, so a bare `unins000.exe` call can be reported as a *failed*
-> uninstall even though it succeeded. `Intune-Uninstall.cmd` polls until both the registry
-> key and the program folder are gone before exiting, so either kind of detection rule is
-> accurate.
+> uninstall even though it succeeded. Both `/S /uninstall` and `Intune-Uninstall.cmd` poll
+> until the registry key and the program folder are actually gone before exiting, so either
+> kind of detection rule is accurate.
 
 Uninstalling removes the program, shortcuts, startup entry and the Apps registration.
 Settings and logs in `%APPDATA%\ZendeskWarningLight` are deliberately kept, so reinstalling
@@ -568,7 +579,7 @@ For anything else, start with the log — **Settings → General → Open log fi
 | A ticked group never fires | Your Zendesk role cannot see that group's tickets; greyed-out rows warn about this |
 | Warning hides behind a game | Exclusive-fullscreen apps sit above all topmost windows; borderless-window mode works |
 | Setup says it is already running | A previous setup was killed and left a `*-Setup.tmp` process holding the mutex; end it in Task Manager |
-| `/S` did nothing / the wizard opened | `/S` is NSIS syntax. Use `/VERYSILENT`. Newer builds abort with exit code 1 instead |
+| `/S` did nothing / the wizard opened | Fixed in 2.4.0 — `/S` installs silently. Older builds need `/VERYSILENT` |
 | Silent install exits 1 with no install | Read the `/LOG`. Either a bad switch, or SYSTEM without `/ALLUSERS` |
 | Installed as SYSTEM but no user sees it | It went to the service profile. Reinstall with `/ALLUSERS` |
 | Listed twice in Settings → Apps | A per-user and a machine-wide copy are both installed; uninstall the one you do not want |
