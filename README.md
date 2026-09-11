@@ -86,56 +86,63 @@ and restarts it. Your settings in `%APPDATA%\ZendeskWarningLight` are never touc
 
 ### Silent install
 
-> **`/S` will never install silently.** That is NSIS syntax. Inno Setup decides silence
-> from its own parser before any script in the installer runs, so nothing on our side can
-> make `/S` mean silent — the switch is **`/VERYSILENT`**. What the installer *can* do,
-> and now does, is **abort immediately with exit code 1** and log the reason, instead of
-> opening a window an unattended deployment can never finish.
-
-**Setup never asks anyone anything.** Install-mode overrides are restricted to the
-command line, so an elevated launch cannot raise a "Select install mode" prompt — that
-prompt appeared *before* any of the installer's own checks could run, which is exactly
-how a bad switch turned into a window instead of an error.
-
-A plain double-click therefore installs **per-user**, with no prompt and no UAC. For a
-machine-wide install you must pass `/ALLUSERS`.
-
-Two install modes, chosen explicitly:
-
 ```bat
-REM machine-wide: Program Files + HKLM, every user. Needs admin or SYSTEM.
-ZendeskWarningLight-Setup-2.3.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
-
-REM per-user: %LOCALAPPDATA%\Programs + HKCU. No admin, no UAC prompt.
-ZendeskWarningLight-Setup-2.3.0.exe /VERYSILENT /CURRENTUSER /SUPPRESSMSGBOXES /NORESTART
+ZendeskWarningLight-Setup-2.4.0.exe /S                REM silent install
+ZendeskWarningLight-Setup-2.4.0.exe /S /uninstall     REM silent uninstall
 ```
+
+`/S` picks the install mode from the account running it: **SYSTEM installs machine-wide**,
+anyone else gets a per-user install. `/S /uninstall` removes whichever copy is installed,
+machine-wide or per-user, and waits until it is genuinely gone before exiting.
+
+Inno's own switches work too, and take precedence when you want to be explicit:
 
 | Switch | Effect |
 |---|---|
-| `/VERYSILENT` | No UI whatsoever *(this is the one you want)* |
-| `/SILENT` | Progress window only, no prompts |
-| `/ALLUSERS` | Machine-wide: `Program Files`, `HKLM`, starts for every user |
-| `/CURRENTUSER` | Per-user: `%LOCALAPPDATA%\Programs`, `HKCU`, that user only |
-| `/SUPPRESSMSGBOXES` | Suppress any message box that would otherwise block |
-| `/NOAUTOSTART` | Do **not** register the startup entry |
+| `/S` | Silent install, mode auto-detected *(NSIS-style, for packaging tools)* |
+| `/S /uninstall` | Silent uninstall of whichever copy is installed |
+| `/uninstall` | The same, interactively |
+| `/VERYSILENT` | Silent, Inno's own switch |
+| `/SILENT` | Progress window only |
+| `/ALLUSERS` | Force machine-wide: `Program Files`, `HKLM`, every user |
+| `/CURRENTUSER` | Force per-user: `%LOCALAPPDATA%\Programs`, `HKCU` |
+| `/SUPPRESSMSGBOXES` | Suppress blocking message boxes |
+| `/NOAUTOSTART` | Do not start at login — removes any existing entry too |
 | `/DESKTOPICON` | Also create a desktop shortcut |
-| `/NOLAUNCH` | Do not start the app once installed |
-| `/DIR="C:\path"` | Install somewhere other than the default |
-| `/LOG="C:\file.log"` | Write a detailed install log — **always use this in Intune** |
-| `/NORESTART` | Never reboot (nothing here needs one) |
+| `/NOLAUNCH` | Do not start the app after installing |
+| `/DIR="C:\path"` | Install somewhere else |
+| `/LOG="C:ile.log"` | Write an install log |
+| `/NORESTART` | Never reboot |
 
-**If you omit `/ALLUSERS` and `/CURRENTUSER`**, Inno uses per-user mode — including when
-launched by an administrator, because `PrivilegesRequired=lowest` means non-administrative
-mode *even when launched by an admin*. Running as **SYSTEM** without `/ALLUSERS` would
-therefore install into `C:\Windows\System32\config\systemprofile`, where no real user
-could ever run it. The installer detects exactly that and **aborts with exit code 1**
-instead of quietly installing somewhere useless.
+Every switch is absolute: the result never depends on what a previous install chose.
+`/NOAUTOSTART` deletes a login entry an earlier install left behind rather than merely
+skipping it, and the wizard's task checkboxes are ignored in silent mode for the same
+reason — see the `[Tasks]` comment in the `.iss`.
 
-The three app-specific switches also accept an explicit value, e.g. `/NOLAUNCH=1` or
-`/NOLAUNCH=0`. Inno's own `/TASKS` and `/MERGETASKS` deliberately do **not** control them
-in silent mode: Inno reuses the task selection recorded by a previous install (and
-`dontinheritcheck` does not prevent it), which made repeat silent installs depend on
-history. See the `[Tasks]` comment in the `.iss` for the detail.
+With `/LOG`, the launcher writes to the file you named and the install itself writes to
+`<yourfile>.install.log` beside it. Two files, because the launcher still holds the first
+one open when the installer starts.
+
+**Setup never asks anyone anything.** Install-mode overrides are restricted to the command
+line, so an elevated launch cannot raise a "Select install mode" prompt. A plain
+double-click installs per-user with no prompt and no UAC.
+
+### How `/S` works, and why it needs a launcher
+
+The shipped exe is a thin **launcher** that carries the real Inno installer inside it. It
+translates the command line, runs the right thing, waits, and exits with that thing's exact
+exit code. Three findings forced this, each from testing rather than assumption:
+
+1. **Inno fixes silent mode in its own parser** before any script runs, and nothing in the
+   script can change it. `/S` alone could never be made to mean silent.
+2. **Script cannot set the exit code.** Aborting always reports `1`, which every deployment
+   tool reads as failure — so an installer cannot relay a command *and* report the real
+   result. The launcher calls `ExitProcess` from `kernel32` to return the true code.
+3. **A running Inno installer holds its own .exe open** against both executing *and*
+   reading it, so it cannot relaunch or even copy itself. Only a separate exe can start it.
+
+The launcher itself installs nothing, creates no folder and leaves no Add/Remove entry — it
+is invisible in every way except the command line it accepts.
 
 ### Exit codes
 

@@ -10,20 +10,19 @@
 ; The {auto*} constants and the HKA registry root pick the right target for the
 ; mode in force, so one script serves both. See README.md for the Intune commands.
 ;
-; Inno silently ignores switches it does not recognise, which makes two common
-; mistakes dangerous rather than merely wrong. InitializeSetup below refuses both:
+; THIS IS NOT THE FILE YOU SHIP. It compiles to build\ZendeskWarningLight-Inner.exe,
+; which Launcher.iss embeds inside the exe that actually goes out. The launcher
+; exists to translate /S and /S /uninstall, which an Inno installer cannot do for
+; itself - see the long comment at the top of Launcher.iss for why.
 ;
-;   /S            NSIS syntax. Ignored here, so the wizard opens and an
-;                 unattended deployment hangs until it times out.
-;   /UNINSTALL    This exe only installs; Inno builds a separate unins000.exe.
-;                 "/VERYSILENT /UNINSTALL" would INSTALL and report success, so a
-;                 patching tool set up that way reinstalls on every uninstall.
+; Consequently this script only ever sees switches Inno understands natively, and
+; the guards below are belt and braces for anyone running the payload directly.
 
 #define AppName      "Zendesk Warning Light"
 #define AppId        "ZendeskWarningLight"
 #define AppPublisher "Karl Almqvist"
 #define AppExe       "ZendeskWarningLight.exe"
-#define AppVersion   "2.3.2"
+#define AppVersion   "2.4.0"
 ; The bare GUID, for building uninstall key paths in [Code].
 #define SetupAppId   "{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}"
 
@@ -55,10 +54,10 @@ DisableProgramGroupPage=yes
 DisableDirPage=auto
 AllowNoIcons=yes
 
-OutputDir=..\dist
-; Version in the filename, so a colleague can tell what they were sent and
-; two releases never silently overwrite one another.
-OutputBaseFilename={#AppId}-Setup-{#AppVersion}
+; Built into build\ as an internal payload. The shipped, versioned filename is
+; produced by Launcher.iss.
+OutputDir=..\build
+OutputBaseFilename={#AppId}-Inner
 SetupIconFile=..\assets\app.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
@@ -67,8 +66,8 @@ Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 
-; Keep a single setup running at a time.
-SetupMutex={#AppId}-setup-mutex
+; No SetupMutex: relaying /S runs a second copy of Setup on purpose, and a mutex
+; has no bypass switch, so it would block the very thing we are doing.
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -101,6 +100,14 @@ Name: "{autodesktop}\{#AppName}";     Filename: "{app}\{#AppExe}"; Check: WantDe
 Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
     ValueType: string; ValueName: "{#AppId}"; ValueData: """{app}\{#AppExe}"""; \
     Flags: uninsdeletevalue; Check: WantAutostart
+
+; Skipping the entry above is not the same as removing one an earlier install left
+; behind, so /NOAUTOSTART has to delete it explicitly. Without this the switch is
+; not authoritative and the outcome depends on install history - the same trap as
+; the task-inheritance one described in [Tasks].
+Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
+    ValueType: none; ValueName: "{#AppId}"; \
+    Flags: deletevalue; Check: NoAutostart
 
 [Run]
 ; Interactive install: offer a "start now" checkbox on the final page.
@@ -170,6 +177,13 @@ begin
     Result := WizardIsTaskSelected('autostart');
 end;
 
+// [Registry] Check expressions take a function name, not an expression, so the
+// negation needs its own function.
+function NoAutostart: Boolean;
+begin
+  Result := not WantAutostart;
+end;
+
 function WantDesktopIcon: Boolean;
 begin
   if WizardSilent then
@@ -178,36 +192,30 @@ begin
     Result := WizardIsTaskSelected('desktopicon');
 end;
 
-// Refuse the two command lines that would otherwise fail in a way nobody can
-// diagnose from an Intune report. Both abort with exit code 1 (failed to
-// initialize) and say why in the /LOG file.
+// Refuse the command line that would otherwise fail in a way nobody can diagnose
+// from a deployment report, and relay the NSIS-style switches to real ones.
 function InitializeSetup: Boolean;
 var
   LocalAppData: String;
 begin
   Result := True;
 
-  // This is the INSTALLER. Inno builds a separate uninstaller (unins000.exe) at
-  // install time, and silently ignores switches it does not recognise - so
-  // "/VERYSILENT /UNINSTALL" installs the app and reports success. A patching tool
-  // configured that way would cheerfully reinstall on every uninstall attempt.
-  // Refuse, in silent mode too, because that is exactly where it would go unseen.
+  // The launcher translates these before we ever run, so seeing one here means
+  // somebody is running the payload directly. Refuse rather than install: Inno
+  // ignores switches it does not know, so /VERYSILENT /UNINSTALL would otherwise
+  // install and report success.
   if SwitchIsOn('UNINSTALL') or SwitchIsOn('U') or SwitchIsOn('REMOVE') then
   begin
-    Log('ABORT: this is the installer and it has no uninstall switch - it would '
-        + 'have INSTALLED. To uninstall, run unins000.exe from the install folder '
-        + '(its path is the UninstallString in the registry), or use '
-        + 'Intune-Uninstall.cmd.');
+    Log('ABORT: this is the install payload and cannot uninstall. Use the shipped '
+        + 'ZendeskWarningLight-Setup-*.exe with /S /uninstall.');
     Result := False;
     Exit;
   end;
 
-  // /S is NSIS syntax. Inno ignores it, shows the wizard, and an unattended
-  // deployment then hangs until it times out.
   if SwitchIsOn('S') and not WizardSilent then
   begin
-    Log('ABORT: /S is not an Inno Setup switch. Use /VERYSILENT (and /ALLUSERS '
-        + 'or /CURRENTUSER). See README.md.');
+    Log('ABORT: /S is handled by the shipped launcher, not by this payload. '
+        + 'Use /VERYSILENT here, or run the shipped exe.');
     Result := False;
     Exit;
   end;

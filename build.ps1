@@ -91,8 +91,16 @@ if ($Installer) {
     ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
     if ($iscc) {
-        Write-Host 'Compiling the setup wizard...' -ForegroundColor Cyan
+        # Two passes: the real installer becomes build\...-Inner.exe, then the
+        # launcher embeds it and produces the versioned exe we actually ship. The
+        # launcher is what translates /S and /S /uninstall - see Launcher.iss.
+        Write-Host 'Compiling the installer payload...' -ForegroundColor Cyan
         & $iscc 'installer\ZendeskWarningLight.iss'
+        $inner = Join-Path $PSScriptRoot 'build\ZendeskWarningLight-Inner.exe'
+        if (-not (Test-Path $inner)) { throw "ISCC did not produce $inner" }
+
+        Write-Host 'Compiling the launcher...' -ForegroundColor Cyan
+        & $iscc 'installer\Launcher.iss'
         $setup = Join-Path $PSScriptRoot "dist\ZendeskWarningLight-Setup-$appVersion.exe"
         if (Test-Path $setup) {
             $setupMb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
