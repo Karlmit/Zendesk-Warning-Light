@@ -86,28 +86,41 @@ and restarts it. Your settings in `%APPDATA%\ZendeskWarningLight` are never touc
 
 ### Silent install
 
-Switches can be combined freely. Setup returns exit code **0** on success and non-zero on
-failure, so it is safe to script.
+> **`/S` does nothing.** That is NSIS syntax; Inno Setup wants **`/VERYSILENT`**. Passing
+> `/S` used to open the wizard, which no unattended deployment can ever finish, so the
+> installer now **aborts immediately with exit code 1** and writes the reason to the log
+> rather than hanging.
+
+Two install modes, chosen explicitly:
 
 ```bat
-ZendeskWarningLight-Setup-2.1.1.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+REM machine-wide: Program Files + HKLM, every user. Needs admin or SYSTEM.
+ZendeskWarningLight-Setup-2.3.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
+
+REM per-user: %LOCALAPPDATA%\Programs + HKCU. No admin, no UAC prompt.
+ZendeskWarningLight-Setup-2.3.0.exe /VERYSILENT /CURRENTUSER /SUPPRESSMSGBOXES /NORESTART
 ```
 
 | Switch | Effect |
 |---|---|
-| `/VERYSILENT` | No UI whatsoever |
+| `/VERYSILENT` | No UI whatsoever *(this is the one you want)* |
 | `/SILENT` | Progress window only, no prompts |
+| `/ALLUSERS` | Machine-wide: `Program Files`, `HKLM`, starts for every user |
+| `/CURRENTUSER` | Per-user: `%LOCALAPPDATA%\Programs`, `HKCU`, that user only |
 | `/SUPPRESSMSGBOXES` | Suppress any message box that would otherwise block |
-| `/NOAUTOSTART` | Do **not** register the Windows startup entry |
+| `/NOAUTOSTART` | Do **not** register the startup entry |
 | `/DESKTOPICON` | Also create a desktop shortcut |
 | `/NOLAUNCH` | Do not start the app once installed |
 | `/DIR="C:\path"` | Install somewhere other than the default |
-| `/LOG="C:\file.log"` | Write a detailed install log |
+| `/LOG="C:\file.log"` | Write a detailed install log — **always use this in Intune** |
 | `/NORESTART` | Never reboot (nothing here needs one) |
 
-A plain `/VERYSILENT` installs, enables autostart, creates no desktop icon, and launches
-the app. The switches are absolute — the result never depends on what a previous install
-selected.
+**If you omit `/ALLUSERS` and `/CURRENTUSER`**, Inno uses per-user mode — including when
+launched by an administrator, because `PrivilegesRequired=lowest` means non-administrative
+mode *even when launched by an admin*. Running as **SYSTEM** without `/ALLUSERS` would
+therefore install into `C:\Windows\System32\config\systemprofile`, where no real user
+could ever run it. The installer detects exactly that and **aborts with exit code 1**
+instead of quietly installing somewhere useless.
 
 The three app-specific switches also accept an explicit value, e.g. `/NOLAUNCH=1` or
 `/NOLAUNCH=0`. Inno's own `/TASKS` and `/MERGETASKS` deliberately do **not** control them
@@ -115,13 +128,123 @@ in silent mode: Inno reuses the task selection recorded by a previous install (a
 `dontinheritcheck` does not prevent it), which made repeat silent installs depend on
 history. See the `[Tasks]` comment in the `.iss` for the detail.
 
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| **0** | Installed successfully |
+| **1** | Failed to initialize — **a bad switch lands here**; read the `/LOG` |
+| 2 | Cancelled before installing started |
+| 3 | Fatal error while preparing to install |
+| 4 | Fatal error during installation |
+| 5 | Cancelled during installation |
+| 6 | Terminated by the debugger |
+| 7 / 8 | Preparing-to-install decided it cannot continue (8 wants a restart) |
+
+## Deploying with Intune
+
+`build.ps1 -Installer` stages two wrappers next to the installer in `dist\`, so you can
+point `IntuneWinAppUtil` at that folder and be done:
+
+```
+dist\
+  ZendeskWarningLight-Setup-2.3.0.exe
+  Intune-Install.cmd
+  Intune-Uninstall.cmd
+```
+
+**`Intune-Install.cmd` picks the mode from the account running it** — SYSTEM gets
+`/ALLUSERS`, anyone else gets `/CURRENTUSER` — by checking for the well-known SYSTEM SID
+`S-1-5-18`. Inno cannot make that choice itself, so it has to be made before Setup starts.
+The wrapper exits with Setup's own exit code, so Intune reports success and failure
+correctly.
+
+| Intune field | Value |
+|---|---|
+| Install command | `Intune-Install.cmd` |
+| Uninstall command | `Intune-Uninstall.cmd` |
+| Install behaviour | **System** for all users, **User** for per-user |
+| Device restart behaviour | No specific action |
+
+Add `/LOG="%TEMP%\zwl-install.log"` to the install command if you want a trace; anything
+you pass to the wrapper is forwarded to Setup.
+
+Prefer the explicit switches over the wrapper if you would rather be unambiguous:
+
+```bat
+ZendeskWarningLight-Setup-2.3.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
+```
+
+### Detection rules
+
+Either works. The registry rule is the one Patch My PC-style version comparison uses:
+
+**Registry** — machine-wide (system context):
+
+```
+Key    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}_is1
+Value  DisplayVersion
+Rule   Version comparison, greater than or equal to, 2.3.0
+```
+
+For a per-user deployment the same key sits under `HKEY_CURRENT_USER`.
+
+**File** — machine-wide:
+
+```
+Path     C:\Program Files\ZendeskWarningLight
+File     ZendeskWarningLight.exe
+Rule     Version, greater than or equal to, 2.3.0
+```
+
+Per-user: `%LOCALAPPDATA%\Programs\ZendeskWarningLight`.
+
+### What stays per-user either way
+
+A machine-wide install shares only the **program files**. Everything personal stays in
+each user's own profile, which is what you want — every person signs in to Zendesk as
+themselves:
+
+| Per user, always | Where |
+|---|---|
+| Settings, modes, schedule | `%APPDATA%\ZendeskWarningLight\config.json` |
+| Sign-in token | `%APPDATA%\ZendeskWarningLight\tokens.json`, DPAPI-encrypted to that account |
+| Ticket history and log | same folder |
+
+So a machine-wide install gives every user the app and starts it at login, and each of
+them signs in once on first run. Uninstalling leaves those folders behind; the app's own
+`--purge` equivalent is documented under Uninstalling.
+
+### Version information
+
+The version is written where Windows inventory and patching tools expect it, from the
+single source of truth in `zwl/__init__.py`:
+
+| Location | Field | Value |
+|---|---|---|
+| Add/Remove Programs | `DisplayVersion` | `2.3.0` |
+| | `DisplayName`, `Publisher`, `InstallLocation`, `DisplayIcon`, `UninstallString`, `QuietUninstallString`, `EstimatedSize`, `VersionMajor`, `VersionMinor` | all populated |
+| `ZendeskWarningLight.exe` | `FileVersion` / `ProductVersion` | `2.3.0` |
+| `…-Setup-2.3.0.exe` | `FileVersion` / `ProductVersion` | `2.3.0` |
+
+So a tool that compares either the ARP `DisplayVersion` or the installed exe's file
+version will see the real version and detect an upgrade normally. The version also appears
+in the installer's filename.
+
 ### Uninstalling
 
 **Settings → Apps → Installed apps → Zendesk Warning Light → Uninstall**, the Start-menu
 shortcut, or silently:
 
 ```bat
+REM per-user install
 "%LOCALAPPDATA%\Programs\ZendeskWarningLight\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES
+
+REM machine-wide install (needs admin)
+"%ProgramFiles%\ZendeskWarningLight\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES
+
+REM or let the wrapper find whichever is present
+Intune-Uninstall.cmd
 ```
 
 That removes the program, shortcuts, startup entry and the Apps registration. Your
@@ -133,7 +256,13 @@ slate.
 
 The installer sets this up. Change it any time from **Settings → General → Start
 automatically when I sign in to Windows** — that checkbox reads and writes the same
-`HKCU\...\CurrentVersion\Run` entry the installer uses, so the two never disagree.
+`Run` entry the installer uses, so the two never disagree.
+
+A **machine-wide** install writes it to `HKLM` instead, so it applies to everyone. The
+app notices: the checkbox shows ticked, greys out, and says your administrator set it
+for all users. That stops it from reading "off" while the app plainly does start at
+login, and stops a tick from adding a duplicate `HKCU` entry that would launch the app
+twice.
 
 Re-running setup re-applies the installer's default, so if you turn autostart off in the
 app and later upgrade, pass `/NOAUTOSTART` (or untick the wizard box) to keep it off.
@@ -345,12 +474,14 @@ assets/                 bundled animations and the generated app.ico
 tests/test_rules.py     transition rules, no network needed
 tests/test_sources.py   ticket sources and their selection, no network needed
 tests/test_modes.py     modes, per-mode groups and the off-day silence
+tests/test_autostart.py start-at-login, including a machine-wide HKLM entry
 tests/test_groups_tab.py the group picker, including per-mode independence
 tools/make_icon.py      generates assets/app.ico for the build
 tools/verify_oauth.py   standalone sign-in check, safe to hand to a colleague
 
 build.ps1               PyInstaller build, optionally the setup wizard too
-installer/*.iss         Inno Setup script -> ZendeskWarningLight-Setup.exe
+installer/*.iss         Inno Setup script -> ZendeskWarningLight-Setup-<version>.exe
+installer/Intune-*.cmd  Intune wrappers; pick the install mode from the account
 install.ps1             no-tooling PowerShell installer (alternative to the wizard)
 installer/uninstall.ps1 reverses install.ps1
 ```
@@ -388,5 +519,10 @@ For anything else, start with the log — **Settings → General → Open log fi
 | A ticked group never fires | Your Zendesk role cannot see that group's tickets; greyed-out rows warn about this |
 | Warning hides behind a game | Exclusive-fullscreen apps sit above all topmost windows; borderless-window mode works |
 | Setup says it is already running | A previous setup was killed and left a `*-Setup.tmp` process holding the mutex; end it in Task Manager |
+| `/S` did nothing / the wizard opened | `/S` is NSIS syntax. Use `/VERYSILENT`. Newer builds abort with exit code 1 instead |
+| Silent install exits 1 with no install | Read the `/LOG`. Either a bad switch, or SYSTEM without `/ALLUSERS` |
+| Installed as SYSTEM but no user sees it | It went to the service profile. Reinstall with `/ALLUSERS` |
+| Listed twice in Settings → Apps | A per-user and a machine-wide copy are both installed; uninstall the one you do not want |
+| Autostart checkbox is greyed out | A machine-wide install set it in `HKLM`; only an admin can change it |
 
 To start over, use **Settings → General → Forget tracked tickets and re-seed**.

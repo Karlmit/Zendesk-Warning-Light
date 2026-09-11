@@ -2,14 +2,25 @@
 ;
 ; Build with:  .\build.ps1 -Installer      (produces dist\ZendeskWarningLight-Setup.exe)
 ;
-; Installs per-user into %LOCALAPPDATA%\Programs, so it never asks for administrator
-; rights. See the [Setup] notes below and README.md for the silent-install switches.
+; Installs either per-user or machine-wide:
+;
+;   Setup.exe /VERYSILENT /CURRENTUSER   -> %LOCALAPPDATA%\Programs, HKCU, no admin
+;   Setup.exe /VERYSILENT /ALLUSERS      -> Program Files, HKLM, needs admin/SYSTEM
+;
+; The {auto*} constants and the HKA registry root pick the right target for the
+; mode in force, so one script serves both. See README.md for the Intune commands.
+;
+; NOTE: /S is an NSIS switch and does nothing here - Inno wants /VERYSILENT.
+; InitializeSetup below fails fast on /S rather than opening a wizard no
+; unattended deployment can ever finish.
 
 #define AppName      "Zendesk Warning Light"
 #define AppId        "ZendeskWarningLight"
 #define AppPublisher "Karl Almqvist"
 #define AppExe       "ZendeskWarningLight.exe"
-#define AppVersion   "2.2.0"
+#define AppVersion   "2.3.0"
+; The bare GUID, for building uninstall key paths in [Code].
+#define SetupAppId   "{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}"
 
 [Setup]
 AppId={{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}
@@ -20,10 +31,14 @@ AppPublisher={#AppPublisher}
 VersionInfoVersion={#AppVersion}
 VersionInfoDescription={#AppName} Setup
 
-; Per-user install: no UAC prompt, no admin rights.
+; Default to a per-user install so a plain double-click needs no UAC prompt, but
+; allow /ALLUSERS (or the dialog) to switch to a machine-wide one. Note that
+; PrivilegesRequired=lowest means non-administrative mode *even when launched by
+; an administrator*, so SYSTEM must pass /ALLUSERS explicitly - see the guard in
+; InitializeSetup.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
-DefaultDirName={localappdata}\Programs\{#AppId}
+PrivilegesRequiredOverridesAllowed=commandline dialog
+DefaultDirName={autopf}\{#AppId}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 DisableDirPage=auto
@@ -67,10 +82,12 @@ Source: "..\dist\{#AppId}\*";         DestDir: "{app}"; Flags: ignoreversion rec
 [Icons]
 Name: "{group}\{#AppName}";           Filename: "{app}\{#AppExe}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{userdesktop}\{#AppName}";     Filename: "{app}\{#AppExe}"; Check: WantDesktopIcon
+Name: "{autodesktop}\{#AppName}";     Filename: "{app}\{#AppExe}"; Check: WantDesktopIcon
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
+; HKA resolves to HKLM in a machine-wide install and HKCU in a per-user one, so a
+; machine-wide deployment starts the app for every user who logs in.
+Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
     ValueType: string; ValueName: "{#AppId}"; ValueData: """{app}\{#AppExe}"""; \
     Flags: uninsdeletevalue; Check: WantAutostart
 
@@ -150,12 +167,74 @@ begin
     Result := WizardIsTaskSelected('desktopicon');
 end;
 
+// Refuse the two command lines that would otherwise fail in a way nobody can
+// diagnose from an Intune report. Both abort with exit code 1 (failed to
+// initialize) and say why in the /LOG file.
+function InitializeSetup: Boolean;
+var
+  LocalAppData: String;
+begin
+  Result := True;
+
+  // /S is NSIS syntax. Inno ignores it, shows the wizard, and an unattended
+  // deployment then hangs until it times out.
+  if SwitchIsOn('S') and not WizardSilent then
+  begin
+    Log('ABORT: /S is not an Inno Setup switch. Use /VERYSILENT (and /ALLUSERS '
+        + 'or /CURRENTUSER). See README.md.');
+    Result := False;
+    Exit;
+  end;
+
+  // Running as SYSTEM without /ALLUSERS would install into the service profile
+  // at C:\Windows\System32\config\systemprofile, where no real user can ever
+  // run it. Detect the outcome rather than trying to identify the account.
+  if not IsAdminInstallMode then
+  begin
+    LocalAppData := Uppercase(ExpandConstant('{localappdata}'));
+    if Pos('\SYSTEMPROFILE\', LocalAppData) > 0 then
+    begin
+      Log('ABORT: running as SYSTEM in per-user mode would install into '
+          + LocalAppData + '. Pass /ALLUSERS for a machine-wide install.');
+      Result := False;
+      Exit;
+    end;
+  end;
+
+  if IsAdminInstallMode then
+    Log('install mode: machine-wide (all users)')
+  else
+    Log('install mode: per-user');
+end;
+
+// A machine-wide install alongside a leftover per-user one means two entries in
+// Settings > Apps and two Run values. Say so in the log; it is the admin's call.
+procedure WarnAboutOtherModeInstall;
+begin
+  if IsAdminInstallMode then
+  begin
+    if RegKeyExists(HKEY_CURRENT_USER,
+        'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupAppId}_is1') then
+      Log('NOTE: a per-user copy is also installed for this account. Uninstall it '
+          + 'to avoid two entries in Settings > Apps.');
+  end
+  else
+  begin
+    if RegKeyExists(HKEY_LOCAL_MACHINE,
+        'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#SetupAppId}_is1') then
+      Log('NOTE: a machine-wide copy is already installed. This per-user install '
+          + 'will shadow it and the app may start twice at login.');
+  end;
+end;
+
 // The app is a tray program that holds its own files open, so it has to be closed
 // before we overwrite it. Runs after the wizard, before any file is copied.
 procedure StopRunningApp;
 var
   ResultCode: Integer;
 begin
+  // As SYSTEM this reaches every logged-in session, which is what a machine-wide
+  // upgrade needs; as a normal user it only reaches that user's own copy.
   Exec(ExpandConstant('{cmd}'), '/C taskkill /IM "{#AppExe}" /F', '',
        SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
@@ -177,6 +256,7 @@ end;
 // app is not listed twice after upgrading to the wizard.
 procedure RemoveLegacyScriptInstall;
 begin
+  // install.ps1 was always per-user, so these are always under HKCU.
   RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER,
     'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppId}');
   DeleteFile(ExpandConstant('{userprograms}\{#AppName}.lnk'));
@@ -186,5 +266,8 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
+  begin
     RemoveLegacyScriptInstall;
+    WarnAboutOtherModeInstall;
+  end;
 end;

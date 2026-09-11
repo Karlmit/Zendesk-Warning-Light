@@ -96,9 +96,20 @@ if ($Installer) {
         $setup = Join-Path $PSScriptRoot "dist\ZendeskWarningLight-Setup-$appVersion.exe"
         if (Test-Path $setup) {
             $setupMb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+
+            # Stage the Intune wrappers beside the installer: IntuneWinAppUtil
+            # packages a whole folder, and the .cmd finds the setup exe next to it.
+            $distDir = Join-Path $PSScriptRoot 'dist'
+            Copy-Item -Force (Join-Path $PSScriptRoot 'installer\Intune-Install.cmd') $distDir
+            Copy-Item -Force (Join-Path $PSScriptRoot 'installer\Intune-Uninstall.cmd') $distDir
+
             Write-Host ''
             Write-Host "Give this file to colleagues:" -ForegroundColor Green
             Write-Host "  $setup  ($setupMb MB)" -ForegroundColor Green
+            Write-Host ''
+            Write-Host "For Intune, package the dist folder - it now also contains:" -ForegroundColor Green
+            Write-Host "  Intune-Install.cmd    (SYSTEM -> all users, user -> current user)"
+            Write-Host "  Intune-Uninstall.cmd"
         } else {
             throw "ISCC finished but $setup is missing."
         }

@@ -584,6 +584,10 @@ class SettingsDialog(QDialog):
 
         self.autostart_check = QCheckBox("Start automatically when I sign in to Windows")
         layout.addWidget(self.autostart_check)
+        self.autostart_note = QLabel("")
+        self.autostart_note.setWordWrap(True)
+        self.autostart_note.setStyleSheet("color:#888;")
+        layout.addWidget(self.autostart_note)
 
         row = QHBoxLayout()
         open_folder = QPushButton("Open settings folder")
@@ -647,9 +651,26 @@ class SettingsDialog(QDialog):
         self.margin_y_spin.setValue(cfg.margin_y)
         self.caption_check.setChecked(cfg.show_caption)
 
-        self.autostart_check.setChecked(autostart.is_enabled())
+        self._refresh_autostart_state()
         self._refresh_account_state()
         self._render_groups()
+
+    def _refresh_autostart_state(self) -> None:
+        """Reflect a machine-wide login item instead of silently disagreeing with it."""
+        self.autostart_check.setChecked(autostart.is_enabled())
+        if autostart.is_machine_wide():
+            # Set under HKLM by a machine-wide install; removing it needs admin
+            # rights, so offering a tickbox that cannot work would be a lie.
+            self.autostart_check.setEnabled(False)
+            self.autostart_check.setToolTip(
+                "Set for all users by your administrator.")
+            self.autostart_note.setText(
+                "Your administrator has set this for everyone on this machine, so it "
+                "cannot be changed here.")
+        else:
+            self.autostart_check.setEnabled(True)
+            self.autostart_check.setToolTip("")
+            self.autostart_note.setText("")
 
     def _refresh_account_state(self) -> None:
         user = self._tokens.user
@@ -1031,7 +1052,7 @@ class SettingsDialog(QDialog):
                 return
 
         wanted_autostart = self.autostart_check.isChecked()
-        if wanted_autostart != autostart.is_enabled():
+        if not autostart.is_machine_wide() and wanted_autostart != autostart.is_enabled():
             if not autostart.set_enabled(wanted_autostart):
                 QMessageBox.warning(
                     self, "Autostart",
