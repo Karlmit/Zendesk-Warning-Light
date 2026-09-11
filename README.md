@@ -243,23 +243,46 @@ in the installer's filename.
 ### Uninstalling
 
 **Settings → Apps → Installed apps → Zendesk Warning Light → Uninstall**, the Start-menu
-shortcut, or silently:
+shortcut, or from a command line.
+
+For Intune, use the wrapper — it finds whichever install is present and, importantly,
+waits for the removal to actually finish:
 
 ```bat
-REM per-user install
-"%LOCALAPPDATA%\Programs\ZendeskWarningLight\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES
-
-REM machine-wide install (needs admin)
-"%ProgramFiles%\ZendeskWarningLight\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES
-
-REM or let the wrapper find whichever is present
 Intune-Uninstall.cmd
 ```
 
-That removes the program, shortcuts, startup entry and the Apps registration. Your
-settings and logs in `%APPDATA%\ZendeskWarningLight` are deliberately kept, so
-reinstalling picks up where you left off — delete that folder by hand for a truly clean
-slate.
+The explicit commands, if you prefer them:
+
+```bat
+REM machine-wide install (needs admin)
+"%ProgramFiles%\ZendeskWarningLight\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+
+REM per-user install
+"%LOCALAPPDATA%\Programs\ZendeskWarningLight\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+```
+
+Both paths are also recorded in the registry as `UninstallString` and
+`QuietUninstallString` under the uninstall key, so a management tool can read them rather
+than assume a path.
+
+> **Why the wrapper rather than `unins000.exe` directly?** Inno's uninstaller copies itself
+> to `%TEMP%` and lets that copy finish the job, so it can delete its own folder. The
+> process you launched therefore **returns exit code 0 while the program folder is still on
+> disk** — measured here at about three seconds' lag. Intune evaluates its detection rule as
+> soon as the command returns, so a bare `unins000.exe` call can be reported as a *failed*
+> uninstall even though it succeeded. `Intune-Uninstall.cmd` polls until both the registry
+> key and the program folder are gone before exiting, so either kind of detection rule is
+> accurate.
+
+Uninstalling removes the program, shortcuts, startup entry and the Apps registration.
+Settings and logs in `%APPDATA%\ZendeskWarningLight` are deliberately kept, so reinstalling
+picks up where each user left off — including their Zendesk sign-in. Pass `--purge` to the
+wrapper to delete those too, though that only clears the account running the command: every
+user has their own folder and their own encrypted token.
+
+Running the wrapper when nothing is installed is a no-op that exits 0, so it is safe for
+Intune to retry.
 
 ### Starting with Windows
 
