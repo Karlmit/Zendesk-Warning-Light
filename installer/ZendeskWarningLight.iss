@@ -18,7 +18,7 @@
 #define AppId        "ZendeskWarningLight"
 #define AppPublisher "Karl Almqvist"
 #define AppExe       "ZendeskWarningLight.exe"
-#define AppVersion   "2.3.0"
+#define AppVersion   "2.3.1"
 ; The bare GUID, for building uninstall key paths in [Code].
 #define SetupAppId   "{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}"
 
@@ -31,13 +31,19 @@ AppPublisher={#AppPublisher}
 VersionInfoVersion={#AppVersion}
 VersionInfoDescription={#AppName} Setup
 
-; Default to a per-user install so a plain double-click needs no UAC prompt, but
-; allow /ALLUSERS (or the dialog) to switch to a machine-wide one. Note that
-; PrivilegesRequired=lowest means non-administrative mode *even when launched by
-; an administrator*, so SYSTEM must pass /ALLUSERS explicitly - see the guard in
-; InitializeSetup.
+; Default to a per-user install, so a plain double-click needs no UAC prompt, and
+; let /ALLUSERS switch to a machine-wide one. PrivilegesRequired=lowest means
+; non-administrative mode *even when launched by an administrator*, so SYSTEM has
+; to pass /ALLUSERS explicitly - see the guard in InitializeSetup.
+;
+; Overrides are "commandline" ONLY, deliberately not "dialog". With "dialog", an
+; elevated launch carrying neither /ALLUSERS nor /CURRENTUSER makes Inno put up a
+; "Select install mode" prompt - and it does so *before* InitializeSetup runs, so
+; the guards below never get a chance and an admin passing a bad switch gets a
+; window rather than an error. Command line only means the caller always decides
+; the mode and Setup never asks anyone anything.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=commandline dialog
+PrivilegesRequiredOverridesAllowed=commandline
 DefaultDirName={autopf}\{#AppId}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes

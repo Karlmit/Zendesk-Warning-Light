@@ -86,10 +86,19 @@ and restarts it. Your settings in `%APPDATA%\ZendeskWarningLight` are never touc
 
 ### Silent install
 
-> **`/S` does nothing.** That is NSIS syntax; Inno Setup wants **`/VERYSILENT`**. Passing
-> `/S` used to open the wizard, which no unattended deployment can ever finish, so the
-> installer now **aborts immediately with exit code 1** and writes the reason to the log
-> rather than hanging.
+> **`/S` will never install silently.** That is NSIS syntax. Inno Setup decides silence
+> from its own parser before any script in the installer runs, so nothing on our side can
+> make `/S` mean silent — the switch is **`/VERYSILENT`**. What the installer *can* do,
+> and now does, is **abort immediately with exit code 1** and log the reason, instead of
+> opening a window an unattended deployment can never finish.
+
+**Setup never asks anyone anything.** Install-mode overrides are restricted to the
+command line, so an elevated launch cannot raise a "Select install mode" prompt — that
+prompt appeared *before* any of the installer's own checks could run, which is exactly
+how a bad switch turned into a window instead of an error.
+
+A plain double-click therefore installs **per-user**, with no prompt and no UAC. For a
+machine-wide install you must pass `/ALLUSERS`.
 
 Two install modes, chosen explicitly:
 
