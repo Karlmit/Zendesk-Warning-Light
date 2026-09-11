@@ -10,15 +10,20 @@
 ; The {auto*} constants and the HKA registry root pick the right target for the
 ; mode in force, so one script serves both. See README.md for the Intune commands.
 ;
-; NOTE: /S is an NSIS switch and does nothing here - Inno wants /VERYSILENT.
-; InitializeSetup below fails fast on /S rather than opening a wizard no
-; unattended deployment can ever finish.
+; Inno silently ignores switches it does not recognise, which makes two common
+; mistakes dangerous rather than merely wrong. InitializeSetup below refuses both:
+;
+;   /S            NSIS syntax. Ignored here, so the wizard opens and an
+;                 unattended deployment hangs until it times out.
+;   /UNINSTALL    This exe only installs; Inno builds a separate unins000.exe.
+;                 "/VERYSILENT /UNINSTALL" would INSTALL and report success, so a
+;                 patching tool set up that way reinstalls on every uninstall.
 
 #define AppName      "Zendesk Warning Light"
 #define AppId        "ZendeskWarningLight"
 #define AppPublisher "Karl Almqvist"
 #define AppExe       "ZendeskWarningLight.exe"
-#define AppVersion   "2.3.1"
+#define AppVersion   "2.3.2"
 ; The bare GUID, for building uninstall key paths in [Code].
 #define SetupAppId   "{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}"
 
@@ -181,6 +186,21 @@ var
   LocalAppData: String;
 begin
   Result := True;
+
+  // This is the INSTALLER. Inno builds a separate uninstaller (unins000.exe) at
+  // install time, and silently ignores switches it does not recognise - so
+  // "/VERYSILENT /UNINSTALL" installs the app and reports success. A patching tool
+  // configured that way would cheerfully reinstall on every uninstall attempt.
+  // Refuse, in silent mode too, because that is exactly where it would go unseen.
+  if SwitchIsOn('UNINSTALL') or SwitchIsOn('U') or SwitchIsOn('REMOVE') then
+  begin
+    Log('ABORT: this is the installer and it has no uninstall switch - it would '
+        + 'have INSTALLED. To uninstall, run unins000.exe from the install folder '
+        + '(its path is the UninstallString in the registry), or use '
+        + 'Intune-Uninstall.cmd.');
+    Result := False;
+    Exit;
+  end;
 
   // /S is NSIS syntax. Inno ignores it, shows the wizard, and an unattended
   // deployment then hangs until it times out.

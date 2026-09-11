@@ -245,12 +245,22 @@ in the installer's filename.
 **Settings → Apps → Installed apps → Zendesk Warning Light → Uninstall**, the Start-menu
 shortcut, or from a command line.
 
-For Intune, use the wrapper — it finds whichever install is present and, importantly,
-waits for the removal to actually finish:
+> **The installer cannot uninstall.** Inno builds a *separate* `unins000.exe` at install
+> time, and it silently ignores switches it does not know — so
+> `Setup.exe /VERYSILENT /UNINSTALL` used to **install the app and exit 0**, meaning a
+> patching tool configured that way would reinstall on every uninstall attempt and report
+> success. `Setup.exe` now refuses `/UNINSTALL`, `/U` and `/REMOVE` outright, in silent
+> mode too, with exit code 1 and the reason in the log.
+
+For Intune, Patch My PC, ConfigMgr or anything else that takes a command line, use the
+wrapper — it finds whichever install is present and, importantly, waits for the removal
+to actually finish:
 
 ```bat
 Intune-Uninstall.cmd
 ```
+
+(The name says Intune, but it is tool-agnostic — plain `cmd` with correct exit codes.)
 
 The explicit commands, if you prefer them:
 
