@@ -21,6 +21,13 @@ log = logging.getLogger(__name__)
 
 DEFAULT_ANIMATION = "Warning-Cat.gif"
 
+# The corners a warning may sit in. Vertical word first, so "bottom" and "right"
+# can be tested with a substring the way overlay._reposition does.
+VALID_CORNERS = (
+    "top-left", "top-right", "bottom-left", "bottom-right",
+)
+DEFAULT_CORNER = "bottom-right"
+
 
 @dataclass
 class Config:
@@ -43,8 +50,12 @@ class Config:
     animation: str = DEFAULT_ANIMATION  # bundled file name or an absolute path
     animation_height: int = 260
     opacity: float = 1.0
-    screen_name: str = ""  # empty == primary screen
-    corner: str = "bottom-right"
+    screen_name: str = ""  # empty == primary screen, "*" == every screen
+    corner: str = DEFAULT_CORNER
+    # Per-monitor overrides, keyed by QScreen name. A monitor with no entry uses
+    # `corner` above. Kept separate from `corner` so unplugging a screen cannot
+    # lose its placement, and so one monitor can differ without disturbing the rest.
+    corner_by_screen: dict = field(default_factory=dict)
     margin_x: int = 24
     margin_y: int = 24
     show_caption: bool = True
@@ -129,6 +140,26 @@ class Config:
             return None
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
+    def corner_for(self, screen_name: str) -> str:
+        """Where the warning sits on a given monitor.
+
+        Falls back to the shared corner, so a new monitor behaves like the rest
+        until someone says otherwise.
+        """
+        override = (self.corner_by_screen or {}).get(screen_name or "")
+        if override in VALID_CORNERS:
+            return override
+        return self.corner if self.corner in VALID_CORNERS else DEFAULT_CORNER
+
+    def set_corner_for(self, screen_name: str, corner: str) -> None:
+        """Pin a monitor to a corner, or pass "" to let it follow the default."""
+        if not screen_name:
+            return
+        if corner in VALID_CORNERS:
+            self.corner_by_screen[screen_name] = corner
+        else:
+            self.corner_by_screen.pop(screen_name, None)
+
     def is_paused(self) -> bool:
         """True when alerts are suppressed right now (expired pauses clear themselves)."""
         expiry = self.pause_expiry()
@@ -168,6 +199,17 @@ class Config:
         cfg.poll_seconds = max(10, int(cfg.poll_seconds))
         cfg.animation_height = max(80, min(900, int(cfg.animation_height)))
         cfg.opacity = max(0.2, min(1.0, float(cfg.opacity)))
+        if cfg.corner not in VALID_CORNERS:
+            log.info("unknown corner %r; using %r", cfg.corner, DEFAULT_CORNER)
+            cfg.corner = DEFAULT_CORNER
+        # Keep only entries that still mean something. Names of monitors that are
+        # not connected right now are deliberately kept: docking and undocking must
+        # not throw away where someone put the warning.
+        cfg.corner_by_screen = {
+            str(name): value
+            for name, value in (cfg.corner_by_screen or {}).items()
+            if str(name) and value in VALID_CORNERS
+        }
         if not cfg.client_id:
             cfg.client_id = CLIENT_ID
 

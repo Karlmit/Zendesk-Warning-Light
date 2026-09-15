@@ -73,6 +73,51 @@ Changing mode takes effect immediately. A warning the new mode no longer permits
 including one for a group the new mode does not watch — is dismissed rather than left
 stranded on screen.
 
+## Where the warning appears
+
+**Settings → Appearance** decides which monitor, and which corner of it.
+
+| Screen | Effect |
+|---|---|
+| **Primary screen** *(default)* | One warning, on whichever monitor Windows calls primary |
+| A named monitor | One warning, always on that monitor |
+| **All screens** | A copy on every monitor — **clicking any copy dismisses them all**, because they describe the same tickets |
+
+Below that, **Corner** sets the default position, and each connected monitor gets its
+own row to override it. So the game monitor can put the cat top-left out of the way
+while the work monitor keeps it bottom-right. A monitor with no override follows the
+default, which is what a newly connected screen does until you say otherwise.
+
+Overrides are remembered per monitor **by name**, and unplugging a screen does not
+forget its setting — undock a laptop and redock it and the placement comes back. The
+settings window only ever speaks for the monitors it can see, so editing at your desk
+cannot disturb how the warning sits at home.
+
+### Full-screen apps and games
+
+The warning is a topmost, frameless window that never takes focus, and it re-asserts
+itself every four seconds because some apps grab the top of the z-order when they go
+full screen. In practice that covers nearly everything, including borderless
+full-screen games and video:
+
+| Situation | What happens |
+|---|---|
+| Borderless / windowed full screen | Appears on top — verified over a full-screen game |
+| An app that grabs the z-order | Covered briefly, then the re-raise brings it back |
+| **Exclusive** full screen (older DirectX games) | May not appear on *that* monitor: the GPU is flipping the app's own swap chain, which is also why Windows suppresses its own notifications |
+| Lock screen, UAC prompt, Ctrl+Alt+Del | Hidden — a separate secure desktop that nothing can draw on |
+
+**"All screens" is the answer to that third row.** An exclusive full-screen app owns the
+monitor it is on and nothing composites over it — but it cannot own the others, so a
+copy on a second monitor is still seen. Pair it with a per-monitor corner and the
+warning stays out of the way of what you are actually doing.
+
+> **It appears during screen sharing.** The app draws its own window rather than using
+> Windows notifications, so Focus Assist and presentation mode do not suppress it: in a
+> Teams share or a projected slide deck, the animation *and* the ticket subject go out
+> to everyone watching. Pause it from the tray, switch to a quieter mode, or turn the
+> caption off in Appearance to at least keep the subject private.
+
 ## Installing
 
 Run **`dist\ZendeskWarningLight-Setup-<version>.exe`** and click through the wizard. It installs
@@ -87,8 +132,8 @@ and restarts it. Your settings in `%APPDATA%\ZendeskWarningLight` are never touc
 ### Silent install
 
 ```bat
-ZendeskWarningLight-Setup-2.4.0.exe /S                REM silent install
-ZendeskWarningLight-Setup-2.4.0.exe /S /uninstall     REM silent uninstall
+ZendeskWarningLight-Setup-2.5.0.exe /S                REM silent install
+ZendeskWarningLight-Setup-2.5.0.exe /S /uninstall     REM silent uninstall
 ```
 
 `/S` picks the install mode from the account running it: **SYSTEM installs machine-wide**,
@@ -164,7 +209,7 @@ point `IntuneWinAppUtil` at that folder and be done:
 
 ```
 dist\
-  ZendeskWarningLight-Setup-2.4.0.exe
+  ZendeskWarningLight-Setup-2.5.0.exe
   Intune-Install.cmd
   Intune-Uninstall.cmd
 ```
@@ -173,8 +218,8 @@ Since 2.4.0 the setup exe does the same job on its own, so the wrappers are a
 convenience rather than a requirement — use whichever suits the tool:
 
 ```bat
-ZendeskWarningLight-Setup-2.4.0.exe /S
-ZendeskWarningLight-Setup-2.4.0.exe /S /uninstall
+ZendeskWarningLight-Setup-2.5.0.exe /S
+ZendeskWarningLight-Setup-2.5.0.exe /S /uninstall
 ```
 
 Both the wrapper and `/S` pick the install mode from the account running them — SYSTEM
@@ -185,8 +230,8 @@ the 35 MB setup exe just to remove something.
 
 | Intune field | Value |
 |---|---|
-| Install command | `Intune-Install.cmd` — or `ZendeskWarningLight-Setup-2.4.0.exe /S` |
-| Uninstall command | `Intune-Uninstall.cmd` — or `ZendeskWarningLight-Setup-2.4.0.exe /S /uninstall` |
+| Install command | `Intune-Install.cmd` — or `ZendeskWarningLight-Setup-2.5.0.exe /S` |
+| Uninstall command | `Intune-Uninstall.cmd` — or `ZendeskWarningLight-Setup-2.5.0.exe /S /uninstall` |
 | Install behaviour | **System** for all users, **User** for per-user |
 | Device restart behaviour | No specific action |
 
@@ -197,7 +242,7 @@ install itself writes `zwl-install.log.install.log` beside it.
 Prefer the explicit switches over either if you would rather be unambiguous:
 
 ```bat
-ZendeskWarningLight-Setup-2.4.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
+ZendeskWarningLight-Setup-2.5.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Detection rules
@@ -209,7 +254,7 @@ Either works. The registry rule is the one Patch My PC-style version comparison 
 ```
 Key    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}_is1
 Value  DisplayVersion
-Rule   Version comparison, greater than or equal to, 2.4.0
+Rule   Version comparison, greater than or equal to, 2.5.0
 ```
 
 For a per-user deployment the same key sits under `HKEY_CURRENT_USER`.
@@ -219,7 +264,7 @@ For a per-user deployment the same key sits under `HKEY_CURRENT_USER`.
 ```
 Path     C:\Program Files\ZendeskWarningLight
 File     ZendeskWarningLight.exe
-Rule     Version, greater than or equal to, 2.4.0
+Rule     Version, greater than or equal to, 2.5.0
 ```
 
 Per-user: `%LOCALAPPDATA%\Programs\ZendeskWarningLight`.
@@ -247,10 +292,10 @@ single source of truth in `zwl/__init__.py`:
 
 | Location | Field | Value |
 |---|---|---|
-| Add/Remove Programs | `DisplayVersion` | `2.4.0` |
+| Add/Remove Programs | `DisplayVersion` | `2.5.0` |
 | | `DisplayName`, `Publisher`, `InstallLocation`, `DisplayIcon`, `UninstallString`, `QuietUninstallString`, `EstimatedSize`, `VersionMajor`, `VersionMinor` | all populated |
-| `ZendeskWarningLight.exe` | `FileVersion` / `ProductVersion` | `2.4.0` |
-| `…-Setup-2.4.0.exe` | `FileVersion` / `ProductVersion` | `2.4.0` |
+| `ZendeskWarningLight.exe` | `FileVersion` / `ProductVersion` | `2.5.0` |
+| `…-Setup-2.5.0.exe` | `FileVersion` / `ProductVersion` | `2.5.0` |
 
 So a tool that compares either the ARP `DisplayVersion` or the installed exe's file
 version will see the real version and detect an upgrade normally. The version also appears
@@ -266,7 +311,7 @@ these finds whichever install is present — machine-wide or per-user — and, i
 waits for the removal to actually finish:
 
 ```bat
-ZendeskWarningLight-Setup-2.4.0.exe /S /uninstall
+ZendeskWarningLight-Setup-2.5.0.exe /S /uninstall
 Intune-Uninstall.cmd
 ```
 
@@ -355,8 +400,9 @@ On first launch the Settings window opens on the **Connection** tab.
    Adjust the rules and groups for each mode. *Nothing ticked means every group you
    can see.*
 3. **Schedule** – optional. Leave it on one mode every day, or set a weekly plan.
-4. **Appearance** – pick the animation, size, screen and corner. **Preview** shows it for
-   four seconds without waiting for a real ticket.
+4. **Appearance** – pick the animation, size, and where it appears: one monitor or all
+   of them, with a corner per monitor. **Preview** shows it for four seconds without
+   waiting for a real ticket, on every screen it would really use.
 
 There is no user ID to look up and no secret to paste: signing in tells the app who you
 are, so the reopen rule configures itself.
@@ -577,7 +623,8 @@ For anything else, start with the log — **Settings → General → Open log fi
 | Too many alerts | Groups tab is empty, so it is watching every group |
 | Reopen rule never fires | Not signed in — the rule needs to know who you are |
 | A ticked group never fires | Your Zendesk role cannot see that group's tickets; greyed-out rows warn about this |
-| Warning hides behind a game | Exclusive-fullscreen apps sit above all topmost windows; borderless-window mode works |
+| Warning hides behind a game | Only *exclusive* full screen can do this. Set Appearance → Screen to **All screens** so another monitor still shows it, or use the game's borderless mode |
+| Warning sits where the game needs it | Appearance → Corner has a row per monitor; move that one screen's copy without disturbing the others |
 | Setup says it is already running | A previous setup was killed and left a `*-Setup.tmp` process holding the mutex; end it in Task Manager |
 | `/S` did nothing / the wizard opened | Fixed in 2.4.0 — `/S` installs silently. Older builds need `/VERYSILENT` |
 | Silent install exits 1 with no install | Read the `/LOG`. Either a bad switch, or SYSTEM without `/ALLUSERS` |

@@ -30,7 +30,12 @@
 #define AppName      "Zendesk Warning Light"
 #define AppId        "ZendeskWarningLight"
 #define AppPublisher "Karl Almqvist"
-#define AppVersion   "2.4.0"
+; Passed in by build.ps1 from zwl/__init__.py, the single source of truth.
+; The fallback only applies when compiling this by hand, and is deliberately
+; not a real version so a hand-built exe can never be mistaken for a release.
+#ifndef AppVersion
+  #define AppVersion "0.0.0-dev"
+#endif
 #define InnerExe     "ZendeskWarningLight-Inner.exe"
 ; Must match the real installer's AppId, so we can find what it installed.
 #define SetupAppId   "{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}"

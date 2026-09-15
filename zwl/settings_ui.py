@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from . import autostart, modes, overlay
 from .auth import AuthError, TokenStore
-from .config import Config
+from .config import Config, DEFAULT_CORNER
 from .paths import assets_dir, data_dir, log_path
 from .zendesk import ZendeskClient, ZendeskError
 
@@ -535,16 +535,45 @@ class SettingsDialog(QDialog):
 
         self.screen_combo = QComboBox()
         self.screen_combo.addItem("Primary screen", "")
-        for screen in QGuiApplication.screens():
+        screens = QGuiApplication.screens()
+        for screen in screens:
             geo = screen.geometry()
             self.screen_combo.addItem("{} – {}x{} at ({}, {})".format(
                 screen.name(), geo.width(), geo.height(), geo.x(), geo.y()), screen.name())
+        # Always offered, even with one monitor: the combo falls back to the first
+        # item when it cannot find the saved value, so omitting this would silently
+        # reset someone's choice the moment they undocked.
+        self.screen_combo.addItem(
+            "All screens ({} connected)".format(len(screens)) if len(screens) > 1
+            else "All screens (1 connected)", overlay.ALL_SCREENS)
         form.addRow("Screen", self.screen_combo)
+
+        screen_hint = QLabel(
+            "A game or video in <i>exclusive</i> full screen owns its monitor and nothing "
+            "can draw over it. Showing the warning on every screen means you still see it "
+            "on another monitor — clicking any copy dismisses them all."
+        )
+        screen_hint.setWordWrap(True)
+        screen_hint.setStyleSheet("color: #6b7280;")
+        form.addRow("", screen_hint)
 
         self.corner_combo = QComboBox()
         for label, value in CORNERS:
             self.corner_combo.addItem(label, value)
         form.addRow("Corner", self.corner_combo)
+
+        # Per-monitor placement. One row per connected screen, each free to differ
+        # from the default above — a game filling one screen and the corner you
+        # actually glance at on another are rarely the same corner.
+        self.corner_by_screen_combos: dict[str, QComboBox] = {}
+        if len(screens) > 1:
+            for screen in screens:
+                combo = QComboBox()
+                combo.addItem("Same as above", "")
+                for label, value in CORNERS:
+                    combo.addItem(label, value)
+                self.corner_by_screen_combos[screen.name()] = combo
+                form.addRow("    on {}".format(screen.name()), combo)
 
         self.margin_x_spin = QSpinBox()
         self.margin_x_spin.setRange(0, 600)
@@ -647,6 +676,8 @@ class SettingsDialog(QDialog):
         self.opacity_spin.setValue(cfg.opacity)
         self._select_data(self.screen_combo, cfg.screen_name)
         self._select_data(self.corner_combo, cfg.corner)
+        for name, combo in self.corner_by_screen_combos.items():
+            self._select_data(combo, (cfg.corner_by_screen or {}).get(name, ""))
         self.margin_x_spin.setValue(cfg.margin_x)
         self.margin_y_spin.setValue(cfg.margin_y)
         self.caption_check.setChecked(cfg.show_caption)
@@ -843,7 +874,11 @@ class SettingsDialog(QDialog):
         cfg.animation_height = self.height_spin.value()
         cfg.opacity = self.opacity_spin.value()
         cfg.screen_name = self.screen_combo.currentData() or ""
-        cfg.corner = self.corner_combo.currentData() or "bottom-right"
+        cfg.corner = self.corner_combo.currentData() or DEFAULT_CORNER
+        # Overrides for monitors that are not connected right now are left alone:
+        # this dialog can only speak for the screens it can see.
+        for name, combo in self.corner_by_screen_combos.items():
+            cfg.set_corner_for(name, combo.currentData() or "")
         cfg.margin_x = self.margin_x_spin.value()
         cfg.margin_y = self.margin_y_spin.value()
         cfg.show_caption = self.caption_check.isChecked()
