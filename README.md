@@ -132,8 +132,8 @@ and restarts it. Your settings in `%APPDATA%\ZendeskWarningLight` are never touc
 ### Silent install
 
 ```bat
-ZendeskWarningLight-Setup-2.5.0.exe /S                REM silent install
-ZendeskWarningLight-Setup-2.5.0.exe /S /uninstall     REM silent uninstall
+ZendeskWarningLight-Setup-2.6.0.exe /S                REM silent install
+ZendeskWarningLight-Setup-2.6.0.exe /S /uninstall     REM silent uninstall
 ```
 
 `/S` picks the install mode from the account running it: **SYSTEM installs machine-wide**,
@@ -209,7 +209,7 @@ point `IntuneWinAppUtil` at that folder and be done:
 
 ```
 dist\
-  ZendeskWarningLight-Setup-2.5.0.exe
+  ZendeskWarningLight-Setup-2.6.0.exe
   Intune-Install.cmd
   Intune-Uninstall.cmd
 ```
@@ -218,8 +218,8 @@ Since 2.4.0 the setup exe does the same job on its own, so the wrappers are a
 convenience rather than a requirement — use whichever suits the tool:
 
 ```bat
-ZendeskWarningLight-Setup-2.5.0.exe /S
-ZendeskWarningLight-Setup-2.5.0.exe /S /uninstall
+ZendeskWarningLight-Setup-2.6.0.exe /S
+ZendeskWarningLight-Setup-2.6.0.exe /S /uninstall
 ```
 
 Both the wrapper and `/S` pick the install mode from the account running them — SYSTEM
@@ -230,8 +230,8 @@ the 35 MB setup exe just to remove something.
 
 | Intune field | Value |
 |---|---|
-| Install command | `Intune-Install.cmd` — or `ZendeskWarningLight-Setup-2.5.0.exe /S` |
-| Uninstall command | `Intune-Uninstall.cmd` — or `ZendeskWarningLight-Setup-2.5.0.exe /S /uninstall` |
+| Install command | `Intune-Install.cmd` — or `ZendeskWarningLight-Setup-2.6.0.exe /S` |
+| Uninstall command | `Intune-Uninstall.cmd` — or `ZendeskWarningLight-Setup-2.6.0.exe /S /uninstall` |
 | Install behaviour | **System** for all users, **User** for per-user |
 | Device restart behaviour | No specific action |
 
@@ -242,7 +242,7 @@ install itself writes `zwl-install.log.install.log` beside it.
 Prefer the explicit switches over either if you would rather be unambiguous:
 
 ```bat
-ZendeskWarningLight-Setup-2.5.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
+ZendeskWarningLight-Setup-2.6.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Detection rules
@@ -254,7 +254,7 @@ Either works. The registry rule is the one Patch My PC-style version comparison 
 ```
 Key    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}_is1
 Value  DisplayVersion
-Rule   Version comparison, greater than or equal to, 2.5.0
+Rule   Version comparison, greater than or equal to, 2.6.0
 ```
 
 For a per-user deployment the same key sits under `HKEY_CURRENT_USER`.
@@ -264,7 +264,7 @@ For a per-user deployment the same key sits under `HKEY_CURRENT_USER`.
 ```
 Path     C:\Program Files\ZendeskWarningLight
 File     ZendeskWarningLight.exe
-Rule     Version, greater than or equal to, 2.5.0
+Rule     Version, greater than or equal to, 2.6.0
 ```
 
 Per-user: `%LOCALAPPDATA%\Programs\ZendeskWarningLight`.
@@ -292,10 +292,10 @@ single source of truth in `zwl/__init__.py`:
 
 | Location | Field | Value |
 |---|---|---|
-| Add/Remove Programs | `DisplayVersion` | `2.5.0` |
+| Add/Remove Programs | `DisplayVersion` | `2.6.0` |
 | | `DisplayName`, `Publisher`, `InstallLocation`, `DisplayIcon`, `UninstallString`, `QuietUninstallString`, `EstimatedSize`, `VersionMajor`, `VersionMinor` | all populated |
-| `ZendeskWarningLight.exe` | `FileVersion` / `ProductVersion` | `2.5.0` |
-| `…-Setup-2.5.0.exe` | `FileVersion` / `ProductVersion` | `2.5.0` |
+| `ZendeskWarningLight.exe` | `FileVersion` / `ProductVersion` | `2.6.0` |
+| `…-Setup-2.6.0.exe` | `FileVersion` / `ProductVersion` | `2.6.0` |
 
 So a tool that compares either the ARP `DisplayVersion` or the installed exe's file
 version will see the real version and detect an upgrade normally. The version also appears
@@ -311,7 +311,7 @@ these finds whichever install is present — machine-wide or per-user — and, i
 waits for the removal to actually finish:
 
 ```bat
-ZendeskWarningLight-Setup-2.5.0.exe /S /uninstall
+ZendeskWarningLight-Setup-2.6.0.exe /S /uninstall
 Intune-Uninstall.cmd
 ```
 
@@ -403,6 +403,8 @@ On first launch the Settings window opens on the **Connection** tab.
 4. **Appearance** – pick the animation, size, and where it appears: one monitor or all
    of them, with a corner per monitor. **Preview** shows it for four seconds without
    waiting for a real ticket, on every screen it would really use.
+5. **Changelog** – what changed in every version, newest first, with the one you are
+   running marked. Nothing to configure; it is there so an upgrade explains itself.
 
 There is no user ID to look up and no secret to paste: signing in tells the app who you
 are, so the reopen rule configures itself.

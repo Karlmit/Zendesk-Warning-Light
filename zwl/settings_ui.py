@@ -9,15 +9,15 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QGuiApplication
+from PySide6.QtGui import QBrush, QColor, QGuiApplication, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPushButton, QRadioButton, QSpinBox, QTabWidget,
-    QVBoxLayout, QWidget,
+    QTextBrowser, QVBoxLayout, QWidget,
 )
 
-from . import autostart, modes, overlay
+from . import autostart, changelog, modes, overlay
 from .auth import AuthError, TokenStore
 from .config import Config, DEFAULT_CORNER
 from .paths import assets_dir, data_dir, log_path
@@ -85,6 +85,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._build_schedule_tab(), "Schedule")
         self._tabs.addTab(self._build_appearance_tab(), "Appearance")
         self._tabs.addTab(self._build_general_tab(), "General")
+        self._tabs.addTab(self._build_changelog_tab(), "Changelog")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, self)
         buttons.accepted.connect(self._on_save)
@@ -591,6 +592,26 @@ class SettingsDialog(QDialog):
         preview_button = QPushButton("Preview for 4 seconds")
         preview_button.clicked.connect(self._on_preview)
         form.addRow("", preview_button)
+        return page
+
+    def _build_changelog_tab(self) -> QWidget:
+        """What changed in each version. Read-only, and needs nothing from Zendesk."""
+        from . import __version__
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        header = QLabel("You are running <b>version {}</b>.".format(__version__))
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        view = QTextBrowser()
+        view.setOpenExternalLinks(True)
+        view.setHtml(changelog.to_html(__version__))
+        # Start at the top: the newest release is the one worth reading.
+        view.moveCursor(QTextCursor.Start)
+        layout.addWidget(view, 1)
+
         return page
 
     def _build_general_tab(self) -> QWidget:
