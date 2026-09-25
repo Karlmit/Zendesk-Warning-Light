@@ -223,12 +223,20 @@ class OverlayWindow(QWidget):
         else:
             title = "{} tickets need attention".format(len(self._alerts))
 
-        subject = newest.subject or "(no subject)"
-        if len(subject) > 68:
-            subject = subject[:67] + "…"
+        subject = _clip(newest.subject or "(no subject)", 68)
         detail = "#{} &middot; {}".format(newest.ticket_id, _escape(subject))
+
+        # Who asked, and which queue it landed in, share the grey line. Either can
+        # be missing - a name that could not be looked up must not leave a stray
+        # separator behind, and the group is blank for a ticket with no group.
+        meta = []
+        if newest.requester_name:
+            meta.append("From {}".format(_escape(_clip(newest.requester_name, 38))))
         if newest.group_name:
-            detail += "<br><span style='color:#9aa0aa'>{}</span>".format(_escape(newest.group_name))
+            meta.append(_escape(newest.group_name))
+        if meta:
+            detail += "<br><span style='color:#9aa0aa'>{}</span>".format(
+                " &middot; ".join(meta))
 
         self._caption.setText(
             "<b style='color:#ffb020'>{}</b><br>{}"
@@ -416,6 +424,12 @@ class OverlayGroup(QObject):
         return list(self._windows)
 
 
+def _clip(text: str, limit: int) -> str:
+    """Keep the caption a readable width; an ellipsis says it was cut."""
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
 def _escape(text: str) -> str:
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
@@ -442,6 +456,10 @@ def preview(config: Config, alerts: list[Alert] | None = None, seconds: float = 
         group_id=None,
         group_name="Preview",
         raised_at=0.0,
+        # A requester too, so the preview shows the real shape of the box rather
+        # than a shorter one than you will actually get.
+        requester_id=0,
+        requester_name="Sam Example",
     )]
     window.set_alerts(demo)
     _preview_window = window

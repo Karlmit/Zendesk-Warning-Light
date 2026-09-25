@@ -178,5 +178,24 @@ class ZendeskClient:
             out.extend(data.get("tickets", []))
         return out
 
+    def users_by_id(self, ids: Iterable[int]) -> dict[int, str]:
+        """Names for specific users, for showing who asked.
+
+        Returns what it could find rather than raising on a partial answer: a
+        missing name must never hold up a warning. Deleted users simply drop out
+        of the response, and Zendesk allows 100 ids per request.
+        """
+        wanted = sorted({int(i) for i in ids if i})
+        names: dict[int, str] = {}
+        for i in range(0, len(wanted), 100):
+            chunk = wanted[i:i + 100]
+            data = self.get("/api/v2/users/show_many.json",
+                            {"ids": ",".join(str(u) for u in chunk)})
+            for user in data.get("users", []):
+                name = (user.get("name") or "").strip()
+                if name:
+                    names[int(user["id"])] = name
+        return names
+
     def ticket_url(self, ticket_id: int) -> str:
         return "{}/agent/tickets/{}".format(self.base_url, int(ticket_id))

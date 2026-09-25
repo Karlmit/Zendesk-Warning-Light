@@ -12,6 +12,25 @@ dismiss it; it also disappears on its own as soon as the underlying reason goes 
 | **Handed back to the queue** | An already-known ticket in a watched group loses its assignee | Same as above |
 | **Your ticket reopened** | A ticket assigned to *you* goes from `pending` back to `open` | It leaves `open`, or is reassigned away from you |
 
+### What the box says
+
+Beside the animation sits an information box naming the ticket, so you can judge it
+without opening anything:
+
+```
+New unassigned ticket
+#45231 · Cannot print payslips
+From Malin Westerlund · Switchboard
+Open ticket #45231 →
+```
+
+Clicking the box opens that ticket in Zendesk and dismisses the warning; clicking the
+animation just dismisses it. The grey line carries whoever **asked** and the group it
+landed in, and either half is dropped if it is not known — a requester whose name
+cannot be looked up costs you the name, never the warning. Long names are shortened
+rather than stretching the box. Turn the whole box off in **Appearance** if you would
+rather the screen gave nothing away.
+
 Those three rules, and the groups they apply to, belong to a **mode** — see below.
 The reopen rule deliberately ignores the group selection: it is about your tickets
 wherever they live.
@@ -132,8 +151,8 @@ and restarts it. Your settings in `%APPDATA%\ZendeskWarningLight` are never touc
 ### Silent install
 
 ```bat
-ZendeskWarningLight-Setup-2.6.0.exe /S                REM silent install
-ZendeskWarningLight-Setup-2.6.0.exe /S /uninstall     REM silent uninstall
+ZendeskWarningLight-Setup-2.7.0.exe /S                REM silent install
+ZendeskWarningLight-Setup-2.7.0.exe /S /uninstall     REM silent uninstall
 ```
 
 `/S` picks the install mode from the account running it: **SYSTEM installs machine-wide**,
@@ -209,7 +228,7 @@ point `IntuneWinAppUtil` at that folder and be done:
 
 ```
 dist\
-  ZendeskWarningLight-Setup-2.6.0.exe
+  ZendeskWarningLight-Setup-2.7.0.exe
   Intune-Install.cmd
   Intune-Uninstall.cmd
 ```
@@ -218,8 +237,8 @@ Since 2.4.0 the setup exe does the same job on its own, so the wrappers are a
 convenience rather than a requirement — use whichever suits the tool:
 
 ```bat
-ZendeskWarningLight-Setup-2.6.0.exe /S
-ZendeskWarningLight-Setup-2.6.0.exe /S /uninstall
+ZendeskWarningLight-Setup-2.7.0.exe /S
+ZendeskWarningLight-Setup-2.7.0.exe /S /uninstall
 ```
 
 Both the wrapper and `/S` pick the install mode from the account running them — SYSTEM
@@ -230,8 +249,8 @@ the 35 MB setup exe just to remove something.
 
 | Intune field | Value |
 |---|---|
-| Install command | `Intune-Install.cmd` — or `ZendeskWarningLight-Setup-2.6.0.exe /S` |
-| Uninstall command | `Intune-Uninstall.cmd` — or `ZendeskWarningLight-Setup-2.6.0.exe /S /uninstall` |
+| Install command | `Intune-Install.cmd` — or `ZendeskWarningLight-Setup-2.7.0.exe /S` |
+| Uninstall command | `Intune-Uninstall.cmd` — or `ZendeskWarningLight-Setup-2.7.0.exe /S /uninstall` |
 | Install behaviour | **System** for all users, **User** for per-user |
 | Device restart behaviour | No specific action |
 
@@ -242,7 +261,7 @@ install itself writes `zwl-install.log.install.log` beside it.
 Prefer the explicit switches over either if you would rather be unambiguous:
 
 ```bat
-ZendeskWarningLight-Setup-2.6.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
+ZendeskWarningLight-Setup-2.7.0.exe /VERYSILENT /ALLUSERS /SUPPRESSMSGBOXES /NORESTART
 ```
 
 ### Detection rules
@@ -254,7 +273,7 @@ Either works. The registry rule is the one Patch My PC-style version comparison 
 ```
 Key    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}_is1
 Value  DisplayVersion
-Rule   Version comparison, greater than or equal to, 2.6.0
+Rule   Version comparison, greater than or equal to, 2.7.0
 ```
 
 For a per-user deployment the same key sits under `HKEY_CURRENT_USER`.
@@ -264,7 +283,7 @@ For a per-user deployment the same key sits under `HKEY_CURRENT_USER`.
 ```
 Path     C:\Program Files\ZendeskWarningLight
 File     ZendeskWarningLight.exe
-Rule     Version, greater than or equal to, 2.6.0
+Rule     Version, greater than or equal to, 2.7.0
 ```
 
 Per-user: `%LOCALAPPDATA%\Programs\ZendeskWarningLight`.
@@ -292,10 +311,10 @@ single source of truth in `zwl/__init__.py`:
 
 | Location | Field | Value |
 |---|---|---|
-| Add/Remove Programs | `DisplayVersion` | `2.6.0` |
+| Add/Remove Programs | `DisplayVersion` | `2.7.0` |
 | | `DisplayName`, `Publisher`, `InstallLocation`, `DisplayIcon`, `UninstallString`, `QuietUninstallString`, `EstimatedSize`, `VersionMajor`, `VersionMinor` | all populated |
-| `ZendeskWarningLight.exe` | `FileVersion` / `ProductVersion` | `2.6.0` |
-| `…-Setup-2.6.0.exe` | `FileVersion` / `ProductVersion` | `2.6.0` |
+| `ZendeskWarningLight.exe` | `FileVersion` / `ProductVersion` | `2.7.0` |
+| `…-Setup-2.7.0.exe` | `FileVersion` / `ProductVersion` | `2.7.0` |
 
 So a tool that compares either the ARP `DisplayVersion` or the installed exe's file
 version will see the real version and detect an upgrade normally. The version also appears
@@ -311,7 +330,7 @@ these finds whichever install is present — machine-wide or per-user — and, i
 waits for the removal to actually finish:
 
 ```bat
-ZendeskWarningLight-Setup-2.6.0.exe /S /uninstall
+ZendeskWarningLight-Setup-2.7.0.exe /S /uninstall
 Intune-Uninstall.cmd
 ```
 

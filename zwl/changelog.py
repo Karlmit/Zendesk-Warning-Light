@@ -24,6 +24,17 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        version="2.7.0",
+        date="2026-09-25",
+        headline="Who asked",
+        changes=(
+            "The information box now names the <b>requester</b> as well as the group, "
+            "so you can tell whose problem it is without opening the ticket.",
+        ),
+        note="If the name cannot be looked up it is simply left out — the warning "
+             "itself is never delayed or lost over it.",
+    ),
+    Release(
         version="2.6.0",
         date="2026-09-15",
         headline="This tab",
