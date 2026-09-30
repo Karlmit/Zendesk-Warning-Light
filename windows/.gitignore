@@ -1,0 +1,10 @@
+.venv/
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+
+# OneDrive / editor noise
+Thumbs.db
+desktop.ini
