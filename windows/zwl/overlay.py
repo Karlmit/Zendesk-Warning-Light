@@ -11,6 +11,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QGuiApplication, QImageReader, QMovie, QScreen
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QVBoxLayout, QWidget
 
+from . import sound
 from .config import Config
 from .monitor import Alert
 
@@ -391,9 +392,13 @@ class OverlayGroup(QObject):
     # ------------------------------------------------------------------ #
 
     def set_alerts(self, alerts: list[Alert]) -> None:
+        # Sound once per appearance, not once per poll or per mirrored monitor.
+        was_showing = any(w.isVisible() for w in self._windows)
         self._alerts = list(alerts)
         for window in self._windows:
             window.set_alerts(alerts)
+        if alerts and not was_showing and self._config.sound_enabled():
+            sound.play_alert(self._config.sound_name)
 
     def show_warning(self) -> None:
         for window in self._windows:

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QTextBrowser, QVBoxLayout, QWidget,
 )
 
-from . import autostart, changelog, modes, overlay
+from . import autostart, changelog, modes, overlay, sound
 from .auth import AuthError, TokenStore
 from .config import Config, DEFAULT_CORNER
 from .paths import assets_dir, data_dir, log_path
@@ -189,6 +189,18 @@ class SettingsDialog(QDialog):
         rules_layout.addWidget(self.identity_label)
         layout.addWidget(rules)
 
+        self.mode_sound_check = QCheckBox("Play a sound when a warning appears")
+        self.mode_sound_check.setToolTip(
+            "Untick for a mode that should warn you silently. Sound must also be "
+            "switched on in Appearance."
+        )
+        self.mode_sound_check.toggled.connect(self._on_rule_toggled)
+        rules_layout.addWidget(self.mode_sound_check)
+        self.mode_sound_hint = QLabel("")
+        self.mode_sound_hint.setWordWrap(True)
+        self.mode_sound_hint.setStyleSheet("color:#888;")
+        rules_layout.addWidget(self.mode_sound_hint)
+
         self.groups_box = QGroupBox("Groups this mode watches")
         groups_layout = QVBoxLayout(self.groups_box)
         self.groups_hint = QLabel("")
@@ -255,6 +267,7 @@ class SettingsDialog(QDialog):
         try:
             for rule, check in self.rule_checks.items():
                 check.setChecked(mode.rule_enabled(rule))
+            self.mode_sound_check.setChecked(mode.play_sound)
         finally:
             self._loading = False
         self._render_groups()
@@ -267,6 +280,7 @@ class SettingsDialog(QDialog):
             return
         for rule, check in self.rule_checks.items():
             mode.set_rule(rule, check.isChecked())
+        mode.play_sound = self.mode_sound_check.isChecked()
         mode.watched_group_ids = self._collect_ticked()
 
     def _on_editing_mode_changed(self) -> None:
@@ -284,6 +298,14 @@ class SettingsDialog(QDialog):
         self._flush_editing_mode()
         self._render_groups()
         self._refresh_mode_summary()
+
+    def _refresh_sound_hint(self) -> None:
+        if not hasattr(self, "mode_sound_hint") or not hasattr(self, "sound_check"):
+            return
+        self.mode_sound_hint.setText(
+            "" if self.sound_check.isChecked()
+            else "Sound is switched off in Appearance, so no mode will play one."
+        )
 
     def _refresh_mode_summary(self) -> None:
         mode = self._editing_mode()
@@ -589,6 +611,23 @@ class SettingsDialog(QDialog):
         self.caption_check = QCheckBox("Show the ticket subject next to the animation")
         form.addRow("", self.caption_check)
 
+        self.sound_check = QCheckBox("Play a sound when a warning appears")
+        form.addRow("", self.sound_check)
+
+        self.sound_combo = QComboBox()
+        for value, label in sound.CHOICES:
+            self.sound_combo.addItem(label, value)
+        test_sound = QPushButton("Test")
+        test_sound.clicked.connect(
+            lambda: sound.play_alert(self.sound_combo.currentData()))
+        sound_row = QHBoxLayout()
+        sound_row.addWidget(self.sound_combo, 1)
+        sound_row.addWidget(test_sound)
+        form.addRow("Sound", sound_row)
+        self.sound_combo.setEnabled(False)
+        self.sound_check.toggled.connect(self.sound_combo.setEnabled)
+        self.sound_check.toggled.connect(self._refresh_sound_hint)
+
         preview_button = QPushButton("Preview for 4 seconds")
         preview_button.clicked.connect(self._on_preview)
         form.addRow("", preview_button)
@@ -702,6 +741,10 @@ class SettingsDialog(QDialog):
         self.margin_x_spin.setValue(cfg.margin_x)
         self.margin_y_spin.setValue(cfg.margin_y)
         self.caption_check.setChecked(cfg.show_caption)
+        self.sound_check.setChecked(cfg.play_sound)
+        self._select_data(self.sound_combo, cfg.sound_name)
+        self.sound_combo.setEnabled(cfg.play_sound)
+        self._refresh_sound_hint()
 
         self._refresh_autostart_state()
         self._refresh_account_state()
@@ -903,6 +946,8 @@ class SettingsDialog(QDialog):
         cfg.margin_x = self.margin_x_spin.value()
         cfg.margin_y = self.margin_y_spin.value()
         cfg.show_caption = self.caption_check.isChecked()
+        cfg.play_sound = self.sound_check.isChecked()
+        cfg.sound_name = self.sound_combo.currentData() or sound.DEFAULT
         return cfg
 
     # ------------------------------------------------------------------ #

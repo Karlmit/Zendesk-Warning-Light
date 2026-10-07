@@ -58,6 +58,9 @@ class DayMode:
     alert_on_became_unassigned: bool = True
     alert_on_pending_to_open: bool = True
     watched_group_ids: list[int] = field(default_factory=list)
+    # Whether this mode may make a sound. Only matters when sound is switched on in
+    # Appearance, which stays the master switch.
+    play_sound: bool = True
 
     # ---- rules -------------------------------------------------------- #
 
@@ -112,6 +115,7 @@ class DayMode:
             "alert_on_became_unassigned": self.alert_on_became_unassigned,
             "alert_on_pending_to_open": self.alert_on_pending_to_open,
             "watched_group_ids": [int(g) for g in self.watched_group_ids],
+            "play_sound": self.play_sound,
         }
 
     @classmethod
@@ -130,6 +134,7 @@ class DayMode:
             alert_on_became_unassigned=bool(raw.get("alert_on_became_unassigned", True)),
             alert_on_pending_to_open=bool(raw.get("alert_on_pending_to_open", True)),
             watched_group_ids=groups,
+            play_sound=bool(raw.get("play_sound", True)),
         )
 
     def copy(self, new_id: str, new_name: str) -> "DayMode":

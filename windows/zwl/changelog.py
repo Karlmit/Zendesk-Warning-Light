@@ -24,6 +24,22 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        version="2.8.0",
+        date="2026-10-05",
+        headline="A sound to go with it",
+        changes=(
+            "<b>Appearance → Play a sound when a warning appears</b> adds an optional "
+            "alert sound. It is <b>off by default</b>.",
+            "It plays once when the warning appears, not on every check. Pick the Windows "
+            "default or a church bell, pan flute or singing bowl, and press <b>Test</b> "
+            "to hear it.",
+            "Each <b>mode</b> has its own <b>Play a sound</b> tick, so a day mode "
+            "(and therefore the weekday schedule) can warn you silently while other "
+            "days make a sound. Sound still has to be switched on in Appearance.",
+        ),
+        note="<b>Preview</b> plays the sound too when the option is ticked.",
+    ),
+    Release(
         version="2.7.0",
         date="2026-09-25",
         headline="Who asked",

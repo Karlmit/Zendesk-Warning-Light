@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, asdict, fields
 from datetime import datetime, timezone
 from typing import Any
 
-from . import modes
+from . import modes, sound
 from .auth import CLIENT_ID
 from .paths import assets_dir, config_path
 
@@ -59,6 +59,9 @@ class Config:
     margin_x: int = 24
     margin_y: int = 24
     show_caption: bool = True
+    # Off by default: a sound in an open office is something to opt into.
+    play_sound: bool = False
+    sound_name: str = "system"  # "system" or a file in assets/sounds
 
     # --- General ----------------------------------------------------------
     start_with_windows: bool = False
@@ -122,6 +125,15 @@ class Config:
         """Whether ``rule`` may fire right now, per the mode in force."""
         active = self.active_mode()
         return bool(active) and active.rule_enabled(rule)
+
+    def sound_enabled(self) -> bool:
+        """Whether a warning appearing right now should make a sound.
+
+        The Appearance option is the master switch; the mode in force (which the
+        weekday schedule picks) can then silence it for that day.
+        """
+        active = self.active_mode()
+        return self.play_sound and (active is None or active.play_sound)
 
     @property
     def watched_group_ids(self) -> list[int]:
@@ -210,6 +222,8 @@ class Config:
             for name, value in (cfg.corner_by_screen or {}).items()
             if str(name) and value in VALID_CORNERS
         }
+        if cfg.sound_name not in sound.VALID:
+            cfg.sound_name = sound.DEFAULT
         if not cfg.client_id:
             cfg.client_id = CLIENT_ID
 
