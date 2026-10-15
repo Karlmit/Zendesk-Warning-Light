@@ -207,6 +207,31 @@ check("many alerts: counted", "2 tickets need attention" in many, True)
 check("many alerts: newest requester shown", "Grace Hopper" in many, True)
 
 
+# --- when the ticket came in ---------------------------------------------
+
+from datetime import datetime, timedelta, timezone   # noqa: E402
+
+fmt = overlay.format_received
+now_utc = datetime.now(timezone.utc)
+today_text = fmt(now_utc.isoformat())
+check("today shows a bare clock time", len(today_text) == 5 and today_text[2] == ":", True)
+old = (now_utc - timedelta(days=3)).isoformat().replace("+00:00", "Z")
+check("older ticket adds the date (and parses a trailing Z)",
+      len(fmt(old).split()) == 3, True)
+check("missing time is blank", fmt(""), "")
+check("garbage time is blank", fmt("not a date"), "")
+check("snapshot keeps created_at", Monitor._snapshot(
+    {"id": 1, "created_at": "2026-10-08T07:05:00Z"}).get("created_at"), "2026-10-08T07:05:00Z")
+check("snapshot tolerates no created_at", Monitor._snapshot({"id": 1}).get("created_at"), "")
+with_time = Alert(ticket_id=9, reason="new_unassigned", subject="s", group_id=None,
+                  group_name="G", raised_at=0.0, requester_id=1, requester_name="Ada",
+                  created_at=now_utc.isoformat())
+w = overlay.OverlayWindow(Config())
+w.set_alerts([with_time])
+check("box shows 'Received'", "Received {}".format(today_text) in w._caption.text(), True)
+w.set_alerts([Alert(**{**with_time.__dict__, "created_at": ""})])
+check("no 'Received' without a time", "Received" in w._caption.text(), False)
+
 # --- report ---------------------------------------------------------------
 
 failed = [c for c in CHECKS if not c[1]]

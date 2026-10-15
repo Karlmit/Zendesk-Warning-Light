@@ -60,6 +60,9 @@ class Alert:
     # than holding up the warning.
     requester_id: int | None = None
     requester_name: str = ""
+    # When the ticket came in (Zendesk's created_at, ISO-8601 UTC). Empty when
+    # unknown, and defaulted so an alert saved by an older version still restores.
+    created_at: str = ""
 
     @property
     def headline(self) -> str:
@@ -366,6 +369,7 @@ class Monitor(QObject):
             "group_id": int(group) if group else None,
             "requester_id": int(requester) if requester else None,
             "subject": (ticket.get("subject") or "").strip(),
+            "created_at": str(ticket.get("created_at") or ""),
             "seen": time.time(),
         }
 
@@ -413,6 +417,7 @@ class Monitor(QObject):
             requester_id=snapshot.get("requester_id"),
             # Filled in afterwards, in one request for the whole batch.
             requester_name=self._requesters.get(snapshot.get("requester_id"), ""),
+            created_at=snapshot.get("created_at") or "",
         )
         self._alerts[ticket_id] = alert
         log.info("ALERT %s: #%s %s", reason, ticket_id, alert.subject[:70])

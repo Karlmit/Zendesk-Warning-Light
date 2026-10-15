@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -235,6 +236,9 @@ class OverlayWindow(QWidget):
             meta.append("From {}".format(_escape(_clip(newest.requester_name, 38))))
         if newest.group_name:
             meta.append(_escape(newest.group_name))
+        received = format_received(newest.created_at)
+        if received:
+            meta.append("Received {}".format(received))
         if meta:
             detail += "<br><span style='color:#9aa0aa'>{}</span>".format(
                 " &middot; ".join(meta))
@@ -429,6 +433,30 @@ class OverlayGroup(QObject):
         return list(self._windows)
 
 
+def format_received(created_at: str, now: datetime | None = None) -> str:
+    """When a ticket came in, in the viewer's local time.
+
+    Just the clock time for today ("14:32"), with the date added for anything older
+    ("5 Oct 14:32"). Empty when the timestamp is missing or unreadable - the
+    warning must never be held up over a detail.
+    """
+    if not created_at:
+        return ""
+    try:
+        # Python 3.10 cannot parse a trailing "Z".
+        moment = datetime.fromisoformat(created_at.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    local = moment.astimezone()
+    today = (now or datetime.now().astimezone()).date()
+    clock = "{:02d}:{:02d}".format(local.hour, local.minute)
+    if local.date() == today:
+        return clock
+    return "{} {} {}".format(local.day, local.strftime("%b"), clock)
+
+
 def _clip(text: str, limit: int) -> str:
     """Keep the caption a readable width; an ellipsis says it was cut."""
     text = (text or "").strip()
@@ -465,6 +493,7 @@ def preview(config: Config, alerts: list[Alert] | None = None, seconds: float = 
         # than a shorter one than you will actually get.
         requester_id=0,
         requester_name="Sam Example",
+        created_at=datetime.now(timezone.utc).isoformat(),
     )]
     window.set_alerts(demo)
     _preview_window = window

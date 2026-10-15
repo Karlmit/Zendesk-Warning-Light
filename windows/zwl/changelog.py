@@ -24,6 +24,16 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        version="2.9.0",
+        date="2026-10-08",
+        headline="When it came in",
+        changes=(
+            "The information box now shows <b>when the ticket came in</b> — just the "
+            "time for today's tickets, with the date added for older ones.",
+        ),
+        note="Shown in your local time. If Zendesk gives no time it is simply left out.",
+    ),
+    Release(
         version="2.8.0",
         date="2026-10-05",
         headline="A sound to go with it",
