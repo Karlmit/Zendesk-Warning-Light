@@ -21,6 +21,11 @@ Full behavior — the alert rules, day modes, tray menu, authentication, trouble
 | **Windows** | [`windows/README.md`](windows/README.md) |
 | **macOS** (Apple Silicon) | [`macos/README.md`](macos/README.md) · [`macos/INSTALL.md`](macos/INSTALL.md) |
 
+**Quick install on a Mac:** run
+`curl -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/install/install-macos.sh | bash`
+— it downloads everything from GitHub, builds the app and installs it. See
+[`install/`](install/).
+
 The two builds share the same rules, modes, and Zendesk auth flow — the macOS README
 calls out anywhere it differs from Windows.
 

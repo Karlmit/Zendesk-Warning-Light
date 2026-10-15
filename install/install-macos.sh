@@ -3,11 +3,11 @@
 # One-step installer: downloads Zendesk Warning Light from GitHub, builds it, and
 # installs it for the current user. No sudo, no admin rights.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/macos/get.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/install/install-macos.sh | bash
 #
 # Options go after `-s --`, for example:
 #
-#   curl -fsSL .../get.sh | bash -s -- --no-autostart
+#   curl -fsSL .../install-macos.sh | bash -s -- --no-autostart
 #
 #   --no-autostart   do not start the app at login
 #   --no-launch      install but do not start it now
