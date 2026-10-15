@@ -14,7 +14,7 @@ from typing import Any, Iterable
 
 import requests
 
-from .auth import AuthError, TokenStore
+from .auth import AuthError, TokenStore, describe_bad_reply
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +77,11 @@ class ZendeskClient:
         if not resp.ok:
             raise ZendeskError("GET {} failed ({}): {}".format(
                 path, resp.status_code, resp.text[:300]))
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise ZendeskError("GET {} did not answer with JSON - {}".format(
+                path, describe_bad_reply(resp))) from exc
 
     def probe(self, path: str, params: dict[str, Any] | None = None) -> int:
         """HTTP status for a call we expect might be forbidden. Never raises on 4xx."""

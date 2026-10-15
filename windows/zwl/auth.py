@@ -128,6 +128,29 @@ class SignedInUser:
 # token store
 # ---------------------------------------------------------------------- #
 
+def describe_bad_reply(resp: requests.Response) -> str:
+    """Say what a reply that should have been JSON actually was.
+
+    A bare "Expecting value: line 1 column 1" tells nobody anything. The usual
+    causes - an empty body, or an HTML sign-in page after a redirect - are obvious
+    from the status, the address it finally came from and the first few characters.
+    """
+    snippet = " ".join((resp.text or "").split())[:160] or "(empty)"
+    hops = " via {} redirect(s)".format(len(resp.history)) if resp.history else ""
+    return "HTTP {} from {}{}, content-type {}: {}".format(
+        resp.status_code, resp.url, hops,
+        resp.headers.get("Content-Type", "unknown"), snippet)
+
+
+def json_body(resp: requests.Response) -> Any:
+    """``resp.json()``, but a non-JSON reply becomes an :class:`AuthError`."""
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise AuthError("Zendesk did not answer with JSON - {}".format(
+            describe_bad_reply(resp))) from exc
+
+
 @dataclass
 class TokenStore:
     """Holds the rotating refresh token and mints access tokens on demand."""
@@ -276,7 +299,7 @@ class TokenStore:
         if not resp.ok:
             raise AuthError("Token refresh failed ({}): {}".format(resp.status_code, resp.text[:200]))
 
-        self._apply(resp.json())
+        self._apply(json_body(resp))
         self.save()
         log.info("token refreshed; next expiry in %ds", int(self._expires_at - time.time()))
 
@@ -368,7 +391,7 @@ class TokenStore:
                 "{} is one of its redirect URLs.".format(
                     resp.status_code, resp.text[:300], redirect_uri)
             )
-        return resp.json()
+        return json_body(resp)
 
     @staticmethod
     def _fetch_user(base: str, access_token: str) -> SignedInUser:
@@ -380,7 +403,7 @@ class TokenStore:
         if not resp.ok:
             raise AuthError("Signed in, but could not read your Zendesk profile "
                             "({}).".format(resp.status_code))
-        return SignedInUser.from_api(resp.json()["user"])
+        return SignedInUser.from_api(json_body(resp)["user"])
 
 
 # ---------------------------------------------------------------------- #
