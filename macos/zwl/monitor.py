@@ -55,6 +55,14 @@ class Alert:
     group_id: int | None
     group_name: str
     raised_at: float
+    # Who asked. Both default, so an alert saved by an older version still
+    # restores, and so a name that cannot be looked up is simply absent rather
+    # than holding up the warning.
+    requester_id: int | None = None
+    requester_name: str = ""
+    # When the ticket came in (Zendesk's created_at, ISO-8601 UTC). Empty when
+    # unknown, and defaulted so an alert saved by an older version still restores.
+    created_at: str = ""
 
     @property
     def headline(self) -> str:
@@ -78,6 +86,10 @@ class Monitor(QObject):
         self._timer: QTimer | None = None
         self._groups: dict[int, str] = {}
         self._groups_fetched_at = 0.0
+        # Requester names, kept for the life of the process. People are renamed
+        # far less often than tickets arrive, and this is only ever read for
+        # tickets that actually raised a warning.
+        self._requesters: dict[int, str] = {}
         self._polling = False
         self._auth_ok = True
         self._off_day_announced = False
@@ -260,6 +272,7 @@ class Monitor(QObject):
         changed = len(tickets)
 
         self._last_poll_ts = time.time()
+        self._resolve_requesters()
         self._reconcile_alerts()
         self._save_state()
 
@@ -277,6 +290,34 @@ class Monitor(QObject):
         if self._source_state.get("kind") not in (None, self._source.name):
             log.info("ticket source changed to %s; re-seeding", self._source.name)
         self._source_state = self._source.state()
+
+    def _resolve_requesters(self) -> None:
+        """Put a name to every live alert, in one request for the lot.
+
+        Deliberately best-effort and deliberately after the rules have run: who
+        asked is worth showing, but it is never worth delaying or losing a warning
+        over. Anything unresolved just stays blank, and is retried next poll.
+        """
+        missing = {a.requester_id for a in self._alerts.values()
+                   if a.requester_id and not a.requester_name}
+        unknown = missing - self._requesters.keys()
+
+        if unknown and self._client is not None:
+            try:
+                self._requesters.update(self._client.users_by_id(unknown))
+            except ZendeskError:
+                log.warning("could not look up %d requester name(s)", len(unknown),
+                            exc_info=True)
+
+        for alert in self._alerts.values():
+            if alert.requester_id and not alert.requester_name:
+                alert.requester_name = self._requesters.get(alert.requester_id, "")
+
+        still_blank = sum(1 for a in self._alerts.values()
+                          if a.requester_id and not a.requester_name)
+        if unknown:
+            log.info("looked up %d requester name(s); %d still unresolved",
+                     len(unknown), still_blank)
 
     def _refresh_groups(self) -> None:
         if self._client is None:
@@ -321,11 +362,14 @@ class Monitor(QObject):
     def _snapshot(ticket: dict[str, Any]) -> dict[str, Any]:
         assignee = ticket.get("assignee_id")
         group = ticket.get("group_id")
+        requester = ticket.get("requester_id")
         return {
             "status": ticket.get("status"),
             "assignee_id": int(assignee) if assignee else None,
             "group_id": int(group) if group else None,
+            "requester_id": int(requester) if requester else None,
             "subject": (ticket.get("subject") or "").strip(),
+            "created_at": str(ticket.get("created_at") or ""),
             "seen": time.time(),
         }
 
@@ -370,6 +414,10 @@ class Monitor(QObject):
             group_id=group_id,
             group_name=self._groups.get(group_id, "") if group_id else "",
             raised_at=time.time(),
+            requester_id=snapshot.get("requester_id"),
+            # Filled in afterwards, in one request for the whole batch.
+            requester_name=self._requesters.get(snapshot.get("requester_id"), ""),
+            created_at=snapshot.get("created_at") or "",
         )
         self._alerts[ticket_id] = alert
         log.info("ALERT %s: #%s %s", reason, ticket_id, alert.subject[:70])

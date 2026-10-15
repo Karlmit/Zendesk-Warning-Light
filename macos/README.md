@@ -118,15 +118,17 @@ The application logic is byte-for-byte identical. Only the platform layer change
 | Start at login | `HKCU\…\CurrentVersion\Run` | **LaunchAgent** at `~/Library/LaunchAgents/com.yourcompany.zendeskwarninglight.plist` |
 | Settings, state, log | `%APPDATA%\ZendeskWarningLight` | `~/Library/Application Support/ZendeskWarningLight` |
 | Reveal a file | `os.startfile` | `/usr/bin/open` |
+| Alert sound | `winsound` | `/usr/bin/afplay` (default is the Glass alert) |
 | No taskbar/Dock entry | `Qt.Tool` window flag | `LSUIElement` in `Info.plist` |
 | App icon | `.ico` | `.icns` via `iconutil` |
 | Installer | Inno Setup `.exe` | `.dmg` + `install.sh` |
 | Signing | unsigned, SmartScreen warns | ad-hoc signed (mandatory on arm64), Gatekeeper warns |
 
-Only five files differ: `zwl/paths.py`, `zwl/keystore.py`, `zwl/autostart.py`, and small
-patches to `zwl/settings_ui.py` and `zwl/auth.py`. Everything else — `monitor.py`,
-`modes.py`, `config.py`, `sources.py`, `zendesk.py`, `overlay.py`, `icons.py` — is the
-Windows code unchanged.
+Only a few files differ: `zwl/paths.py`, `zwl/keystore.py`, `zwl/autostart.py`,
+`zwl/sound.py`, and small patches to `zwl/settings_ui.py`, `zwl/auth.py` and
+`zwl/changelog.py` (the Windows packaging releases are left out). Everything else —
+`monitor.py`, `modes.py`, `config.py`, `sources.py`, `zendesk.py`, `overlay.py`,
+`icons.py` — is the Windows code unchanged.
 
 The OAuth setup needs **no changes in Zendesk**: the loopback redirect URLs already
 registered (`http://127.0.0.1:47821-47823/callback`) work identically on macOS.
@@ -136,7 +138,9 @@ registered (`http://127.0.0.1:47821-47823/callback`) work identically on macOS.
 - **Full-screen apps.** The overlay is a topmost window, which floats above normal and
   maximised windows but not above a true full-screen Space. Fixing that needs an
   `NSWindow` level change through pyobjc, which this port deliberately avoids to stay
-  dependency-light. Windows has the same limitation with exclusive-fullscreen apps.
+  dependency-light. Windows has the same limitation with exclusive-fullscreen apps. The
+  workaround is the same too: **Appearance → Screen → All screens** also shows the warning
+  on your other displays.
 - **The menu-bar icon is in colour.** macOS convention is a monochrome template image
   that adapts to light/dark menu bars. The colour cat is deliberate — it is the app's
   identity — but it will not invert in dark mode like system icons do.
@@ -160,7 +164,9 @@ zwl/monitor.py           polling loop and the transition rules
 zwl/modes.py             the DayMode type, seeding and the weekday plan
 zwl/sources.py           the two ticket sources and how one is chosen
 zwl/zendesk.py           REST client, authenticated as the signed-in user
-zwl/overlay.py           the always-on-top animated window
+zwl/overlay.py           the always-on-top animated window (one per screen, if mirrored)
+zwl/sound.py             optional alert sound  <- platform layer
+zwl/changelog.py         what changed per version, shown in the Changelog tab
 zwl/settings_ui.py       settings dialog
 zwl/config.py            settings model and persistence
 zwl/icons.py             icons built from the cat GIF's first frame
@@ -173,7 +179,7 @@ run.command              double-click to run from source, no build
 tools/preflight.py       verifies the macOS layer on a real Mac  <- run this first
 tools/verify_oauth.py    standalone Zendesk sign-in check
 tools/make_iconset.py    generates the .iconset for iconutil
-tests/                   the same 128 platform-independent checks as Windows
+tests/                   the same platform-independent checks as Windows
 ```
 
 ## Troubleshooting

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEasingCurve, QObject, QPropertyAnimation, QSize, Qt, QTimer, Signal,
+)
 from PySide6.QtGui import QGuiApplication, QImageReader, QMovie, QScreen
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QVBoxLayout, QWidget
 
+from . import sound
 from .config import Config
 from .monitor import Alert
 
@@ -17,6 +21,10 @@ log = logging.getLogger(__name__)
 CAPTION_MAX_WIDTH = 360
 RAISE_INTERVAL_MS = 4000
 FADE_MS = 260
+
+# Sentinel for Config.screen_name meaning "mirror onto every monitor". Not a legal
+# QScreen name, so it can never collide with a real one.
+ALL_SCREENS = "*"
 
 CAPTION_STYLE = """
 QLabel#caption {
@@ -56,12 +64,15 @@ class OverlayWindow(QWidget):
     pause_requested = Signal(int)      # minutes
     settings_requested = Signal()
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, screen: QScreen | None = None):
         super().__init__(None)
         self._config = config
         self._alerts: list[Alert] = []
         self._movie: QMovie | None = None
         self._source_size = QSize(480, 480)
+        # When set, this window belongs to one specific monitor and ignores the
+        # configured screen. OverlayGroup uses this to mirror onto every screen.
+        self._pinned_screen = screen
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -158,8 +169,10 @@ class OverlayWindow(QWidget):
             movie.start()
 
     def _target_screen(self) -> QScreen:
+        if self._pinned_screen is not None:
+            return self._pinned_screen
         wanted = (self._config.screen_name or "").strip()
-        if wanted:
+        if wanted and wanted != ALL_SCREENS:
             for screen in QGuiApplication.screens():
                 if screen.name() == wanted:
                     return screen
@@ -169,10 +182,19 @@ class OverlayWindow(QWidget):
         screen = self._target_screen()
         if screen is None:
             return
+        # Tell Qt which monitor this is on before moving it. Geometry alone would
+        # land in the right place, but a window whose handle still thinks it is on
+        # the old screen scales its contents by that screen's DPI.
+        handle = self.windowHandle()
+        if handle is not None and handle.screen() is not screen:
+            handle.setScreen(screen)
+
         area = screen.availableGeometry()   # excludes the taskbar
         size = self.sizeHint().expandedTo(self.size())
         mx, my = self._config.margin_x, self._config.margin_y
-        corner = self._config.corner
+        # Each monitor can be placed on its own: a game on one screen and a corner
+        # you actually look at on another are rarely the same corner.
+        corner = self._config.corner_for(screen.name())
 
         x = area.right() - size.width() - mx if "right" in corner else area.left() + mx
         y = area.bottom() - size.height() - my if "bottom" in corner else area.top() + my
@@ -203,12 +225,23 @@ class OverlayWindow(QWidget):
         else:
             title = "{} tickets need attention".format(len(self._alerts))
 
-        subject = newest.subject or "(no subject)"
-        if len(subject) > 68:
-            subject = subject[:67] + "…"
+        subject = _clip(newest.subject or "(no subject)", 68)
         detail = "#{} &middot; {}".format(newest.ticket_id, _escape(subject))
+
+        # Who asked, and which queue it landed in, share the grey line. Either can
+        # be missing - a name that could not be looked up must not leave a stray
+        # separator behind, and the group is blank for a ticket with no group.
+        meta = []
+        if newest.requester_name:
+            meta.append("From {}".format(_escape(_clip(newest.requester_name, 38))))
         if newest.group_name:
-            detail += "<br><span style='color:#9aa0aa'>{}</span>".format(_escape(newest.group_name))
+            meta.append(_escape(newest.group_name))
+        received = format_received(newest.created_at)
+        if received:
+            meta.append("Received {}".format(received))
+        if meta:
+            detail += "<br><span style='color:#9aa0aa'>{}</span>".format(
+                " &middot; ".join(meta))
 
         self._caption.setText(
             "<b style='color:#ffb020'>{}</b><br>{}"
@@ -286,11 +319,155 @@ class OverlayWindow(QWidget):
         event.accept()
 
 
+class OverlayGroup(QObject):
+    """One or many :class:`OverlayWindow`s, presented as if there were only one.
+
+    An exclusive full-screen app owns the monitor it is on and nothing composites
+    over it, so the only reliable way to be seen while gaming is to also appear on
+    another monitor. Setting the screen to "all" mirrors the warning everywhere;
+    dismissing any copy dismisses the lot, because they are all the same alert.
+    """
+
+    dismissed = Signal()
+    open_ticket_requested = Signal(int)
+    pause_requested = Signal(int)
+    settings_requested = Signal()
+
+    def __init__(self, config: Config):
+        super().__init__(None)
+        self._config = config
+        self._windows: list[OverlayWindow] = []
+        self._alerts: list[Alert] = []
+        self._build()
+
+        # A monitor arriving or leaving changes how many windows we need. Rebuild
+        # rather than patch: cheap, and it cannot drift out of step with reality.
+        app = QGuiApplication.instance()
+        if app is not None:
+            app.screenAdded.connect(self._on_screens_changed)
+            app.screenRemoved.connect(self._on_screens_changed)
+
+    # ------------------------------------------------------------------ #
+    # composition
+    # ------------------------------------------------------------------ #
+
+    def _mirrors_everywhere(self) -> bool:
+        return (self._config.screen_name or "").strip() == ALL_SCREENS
+
+    def _build(self) -> None:
+        if self._mirrors_everywhere():
+            screens = QGuiApplication.screens() or [None]
+        else:
+            screens = [None]   # a single window that follows the configured screen
+
+        for screen in screens:
+            window = OverlayWindow(self._config, screen)
+            window.dismissed.connect(self._on_dismissed)
+            window.open_ticket_requested.connect(self.open_ticket_requested)
+            window.pause_requested.connect(self.pause_requested)
+            window.settings_requested.connect(self.settings_requested)
+            self._windows.append(window)
+
+    def _teardown(self) -> None:
+        for window in self._windows:
+            window.hide_warning()
+            window.deleteLater()
+        self._windows = []
+
+    def _rebuild(self) -> None:
+        """Replace the windows, putting any live warning back on screen."""
+        alerts, self._alerts = self._alerts, []
+        self._teardown()
+        self._build()
+        if alerts:
+            self.set_alerts(alerts)
+
+    def _on_screens_changed(self, _screen: QScreen) -> None:
+        if self._mirrors_everywhere():
+            self._rebuild()
+        else:
+            # The configured monitor may have just come back, or gone away and left
+            # the window stranded off-screen. Either way, re-place it.
+            for window in self._windows:
+                window.reload_appearance(self._config)
+
+    # ------------------------------------------------------------------ #
+    # the OverlayWindow interface app.py uses
+    # ------------------------------------------------------------------ #
+
+    def set_alerts(self, alerts: list[Alert]) -> None:
+        # Sound once per appearance, not once per poll or per mirrored monitor.
+        was_showing = any(w.isVisible() for w in self._windows)
+        self._alerts = list(alerts)
+        for window in self._windows:
+            window.set_alerts(alerts)
+        if alerts and not was_showing and self._config.sound_enabled():
+            sound.play_alert(self._config.sound_name)
+
+    def show_warning(self) -> None:
+        for window in self._windows:
+            window.show_warning()
+
+    def hide_warning(self) -> None:
+        self._alerts = []
+        for window in self._windows:
+            window.hide_warning()
+
+    def reload_appearance(self, config: Config) -> None:
+        was_mirroring = self._mirrors_everywhere()
+        self._config = config
+        if was_mirroring != self._mirrors_everywhere():
+            self._rebuild()      # the number of windows changed
+            return
+        for window in self._windows:
+            window.reload_appearance(config)
+
+    def _on_dismissed(self) -> None:
+        # One click clears every copy: they all describe the same tickets.
+        self.hide_warning()
+        self.dismissed.emit()
+
+    @property
+    def windows(self) -> list[OverlayWindow]:
+        """Exposed for tests and for logging how many monitors are in use."""
+        return list(self._windows)
+
+
+def format_received(created_at: str, now: datetime | None = None) -> str:
+    """When a ticket came in, in the viewer's local time.
+
+    Just the clock time for today ("14:32"), with the date added for anything older
+    ("5 Oct 14:32"). Empty when the timestamp is missing or unreadable - the
+    warning must never be held up over a detail.
+    """
+    if not created_at:
+        return ""
+    try:
+        # Python 3.10 cannot parse a trailing "Z".
+        moment = datetime.fromisoformat(created_at.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    local = moment.astimezone()
+    today = (now or datetime.now().astimezone()).date()
+    clock = "{:02d}:{:02d}".format(local.hour, local.minute)
+    if local.date() == today:
+        return clock
+    return "{} {} {}".format(local.day, local.strftime("%b"), clock)
+
+
+def _clip(text: str, limit: int) -> str:
+    """Keep the caption a readable width; an ellipsis says it was cut."""
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
 def _escape(text: str) -> str:
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-_preview_window: OverlayWindow | None = None
+_preview_window: OverlayGroup | None = None
 
 
 def preview(config: Config, alerts: list[Alert] | None = None, seconds: float = 4.0) -> None:
@@ -299,11 +476,12 @@ def preview(config: Config, alerts: list[Alert] | None = None, seconds: float = 
     if QApplication.instance() is None:
         return
     if _preview_window is not None:
-        _preview_window.close()
+        _preview_window.hide_warning()
         _preview_window.deleteLater()
 
-    window = OverlayWindow(config)
-    window.dismissed.connect(window.hide_warning)
+    # A group, not a bare window, so previewing "all screens" really shows all of
+    # them - otherwise the preview would quietly disagree with the setting.
+    window = OverlayGroup(config)
     demo = alerts or [Alert(
         ticket_id=12345,
         reason="new_unassigned",
@@ -311,6 +489,11 @@ def preview(config: Config, alerts: list[Alert] | None = None, seconds: float = 
         group_id=None,
         group_name="Preview",
         raised_at=0.0,
+        # A requester too, so the preview shows the real shape of the box rather
+        # than a shorter one than you will actually get.
+        requester_id=0,
+        requester_name="Sam Example",
+        created_at=datetime.now(timezone.utc).isoformat(),
     )]
     window.set_alerts(demo)
     _preview_window = window

@@ -68,7 +68,10 @@ class WarningLightApp(QObject):
                                   client_id=self._config.client_id)
         self._tokens.load()
 
-        self._overlay = overlay.OverlayWindow(self._config)
+        # A group, not a single window: with the screen set to "all" it mirrors
+        # onto every monitor, which is the only way to be seen past a game in
+        # exclusive full screen. The interface is the same either way.
+        self._overlay = overlay.OverlayGroup(self._config)
         self._overlay.dismissed.connect(self._on_dismiss)
         self._overlay.open_ticket_requested.connect(self._open_ticket)
         self._overlay.pause_requested.connect(self._pause_for)

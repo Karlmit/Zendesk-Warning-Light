@@ -8,17 +8,17 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QGuiApplication
+from PySide6.QtGui import QBrush, QColor, QGuiApplication, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
     QFormLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPushButton, QRadioButton, QSpinBox, QTabWidget,
-    QVBoxLayout, QWidget,
+    QTextBrowser, QVBoxLayout, QWidget,
 )
 
-from . import autostart, modes, overlay
+from . import autostart, changelog, modes, overlay, sound
 from .auth import AuthError, TokenStore
-from .config import Config
+from .config import Config, DEFAULT_CORNER
 from .paths import assets_dir, data_dir, log_path
 from .zendesk import ZendeskClient, ZendeskError
 
@@ -84,6 +84,7 @@ class SettingsDialog(QDialog):
         self._tabs.addTab(self._build_schedule_tab(), "Schedule")
         self._tabs.addTab(self._build_appearance_tab(), "Appearance")
         self._tabs.addTab(self._build_general_tab(), "General")
+        self._tabs.addTab(self._build_changelog_tab(), "Changelog")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, self)
         buttons.accepted.connect(self._on_save)
@@ -187,6 +188,18 @@ class SettingsDialog(QDialog):
         rules_layout.addWidget(self.identity_label)
         layout.addWidget(rules)
 
+        self.mode_sound_check = QCheckBox("Play a sound when a warning appears")
+        self.mode_sound_check.setToolTip(
+            "Untick for a mode that should warn you silently. Sound must also be "
+            "switched on in Appearance."
+        )
+        self.mode_sound_check.toggled.connect(self._on_rule_toggled)
+        rules_layout.addWidget(self.mode_sound_check)
+        self.mode_sound_hint = QLabel("")
+        self.mode_sound_hint.setWordWrap(True)
+        self.mode_sound_hint.setStyleSheet("color:#888;")
+        rules_layout.addWidget(self.mode_sound_hint)
+
         self.groups_box = QGroupBox("Groups this mode watches")
         groups_layout = QVBoxLayout(self.groups_box)
         self.groups_hint = QLabel("")
@@ -253,6 +266,7 @@ class SettingsDialog(QDialog):
         try:
             for rule, check in self.rule_checks.items():
                 check.setChecked(mode.rule_enabled(rule))
+            self.mode_sound_check.setChecked(mode.play_sound)
         finally:
             self._loading = False
         self._render_groups()
@@ -265,6 +279,7 @@ class SettingsDialog(QDialog):
             return
         for rule, check in self.rule_checks.items():
             mode.set_rule(rule, check.isChecked())
+        mode.play_sound = self.mode_sound_check.isChecked()
         mode.watched_group_ids = self._collect_ticked()
 
     def _on_editing_mode_changed(self) -> None:
@@ -282,6 +297,14 @@ class SettingsDialog(QDialog):
         self._flush_editing_mode()
         self._render_groups()
         self._refresh_mode_summary()
+
+    def _refresh_sound_hint(self) -> None:
+        if not hasattr(self, "mode_sound_hint") or not hasattr(self, "sound_check"):
+            return
+        self.mode_sound_hint.setText(
+            "" if self.sound_check.isChecked()
+            else "Sound is switched off in Appearance, so no mode will play one."
+        )
 
     def _refresh_mode_summary(self) -> None:
         mode = self._editing_mode()
@@ -534,16 +557,45 @@ class SettingsDialog(QDialog):
 
         self.screen_combo = QComboBox()
         self.screen_combo.addItem("Primary screen", "")
-        for screen in QGuiApplication.screens():
+        screens = QGuiApplication.screens()
+        for screen in screens:
             geo = screen.geometry()
             self.screen_combo.addItem("{} – {}x{} at ({}, {})".format(
                 screen.name(), geo.width(), geo.height(), geo.x(), geo.y()), screen.name())
+        # Always offered, even with one monitor: the combo falls back to the first
+        # item when it cannot find the saved value, so omitting this would silently
+        # reset someone's choice the moment they undocked.
+        self.screen_combo.addItem(
+            "All screens ({} connected)".format(len(screens)) if len(screens) > 1
+            else "All screens (1 connected)", overlay.ALL_SCREENS)
         form.addRow("Screen", self.screen_combo)
+
+        screen_hint = QLabel(
+            "A game or video in <i>exclusive</i> full screen owns its monitor and nothing "
+            "can draw over it. Showing the warning on every screen means you still see it "
+            "on another monitor — clicking any copy dismisses them all."
+        )
+        screen_hint.setWordWrap(True)
+        screen_hint.setStyleSheet("color: #6b7280;")
+        form.addRow("", screen_hint)
 
         self.corner_combo = QComboBox()
         for label, value in CORNERS:
             self.corner_combo.addItem(label, value)
         form.addRow("Corner", self.corner_combo)
+
+        # Per-monitor placement. One row per connected screen, each free to differ
+        # from the default above — a game filling one screen and the corner you
+        # actually glance at on another are rarely the same corner.
+        self.corner_by_screen_combos: dict[str, QComboBox] = {}
+        if len(screens) > 1:
+            for screen in screens:
+                combo = QComboBox()
+                combo.addItem("Same as above", "")
+                for label, value in CORNERS:
+                    combo.addItem(label, value)
+                self.corner_by_screen_combos[screen.name()] = combo
+                form.addRow("    on {}".format(screen.name()), combo)
 
         self.margin_x_spin = QSpinBox()
         self.margin_x_spin.setRange(0, 600)
@@ -558,9 +610,46 @@ class SettingsDialog(QDialog):
         self.caption_check = QCheckBox("Show the ticket subject next to the animation")
         form.addRow("", self.caption_check)
 
+        self.sound_check = QCheckBox("Play a sound when a warning appears")
+        form.addRow("", self.sound_check)
+
+        self.sound_combo = QComboBox()
+        for value, label in sound.CHOICES:
+            self.sound_combo.addItem(label, value)
+        test_sound = QPushButton("Test")
+        test_sound.clicked.connect(
+            lambda: sound.play_alert(self.sound_combo.currentData()))
+        sound_row = QHBoxLayout()
+        sound_row.addWidget(self.sound_combo, 1)
+        sound_row.addWidget(test_sound)
+        form.addRow("Sound", sound_row)
+        self.sound_combo.setEnabled(False)
+        self.sound_check.toggled.connect(self.sound_combo.setEnabled)
+        self.sound_check.toggled.connect(self._refresh_sound_hint)
+
         preview_button = QPushButton("Preview for 4 seconds")
         preview_button.clicked.connect(self._on_preview)
         form.addRow("", preview_button)
+        return page
+
+    def _build_changelog_tab(self) -> QWidget:
+        """What changed in each version. Read-only, and needs nothing from Zendesk."""
+        from . import __version__
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        header = QLabel("You are running <b>version {}</b>.".format(__version__))
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        view = QTextBrowser()
+        view.setOpenExternalLinks(True)
+        view.setHtml(changelog.to_html(__version__))
+        # Start at the top: the newest release is the one worth reading.
+        view.moveCursor(QTextCursor.Start)
+        layout.addWidget(view, 1)
+
         return page
 
     def _build_general_tab(self) -> QWidget:
@@ -642,9 +731,15 @@ class SettingsDialog(QDialog):
         self.opacity_spin.setValue(cfg.opacity)
         self._select_data(self.screen_combo, cfg.screen_name)
         self._select_data(self.corner_combo, cfg.corner)
+        for name, combo in self.corner_by_screen_combos.items():
+            self._select_data(combo, (cfg.corner_by_screen or {}).get(name, ""))
         self.margin_x_spin.setValue(cfg.margin_x)
         self.margin_y_spin.setValue(cfg.margin_y)
         self.caption_check.setChecked(cfg.show_caption)
+        self.sound_check.setChecked(cfg.play_sound)
+        self._select_data(self.sound_combo, cfg.sound_name)
+        self.sound_combo.setEnabled(cfg.play_sound)
+        self._refresh_sound_hint()
 
         self.autostart_check.setChecked(autostart.is_enabled())
         self._refresh_account_state()
@@ -821,10 +916,16 @@ class SettingsDialog(QDialog):
         cfg.animation_height = self.height_spin.value()
         cfg.opacity = self.opacity_spin.value()
         cfg.screen_name = self.screen_combo.currentData() or ""
-        cfg.corner = self.corner_combo.currentData() or "bottom-right"
+        cfg.corner = self.corner_combo.currentData() or DEFAULT_CORNER
+        # Overrides for monitors that are not connected right now are left alone:
+        # this dialog can only speak for the screens it can see.
+        for name, combo in self.corner_by_screen_combos.items():
+            cfg.set_corner_for(name, combo.currentData() or "")
         cfg.margin_x = self.margin_x_spin.value()
         cfg.margin_y = self.margin_y_spin.value()
         cfg.show_caption = self.caption_check.isChecked()
+        cfg.play_sound = self.sound_check.isChecked()
+        cfg.sound_name = self.sound_combo.currentData() or sound.DEFAULT
         return cfg
 
     # ------------------------------------------------------------------ #

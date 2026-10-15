@@ -13,13 +13,20 @@ from dataclasses import dataclass, field, asdict, fields
 from datetime import datetime, timezone
 from typing import Any
 
-from . import modes
+from . import modes, sound
 from .auth import CLIENT_ID
 from .paths import assets_dir, config_path
 
 log = logging.getLogger(__name__)
 
 DEFAULT_ANIMATION = "Warning-Cat.gif"
+
+# The corners a warning may sit in. Vertical word first, so "bottom" and "right"
+# can be tested with a substring the way overlay._reposition does.
+VALID_CORNERS = (
+    "top-left", "top-right", "bottom-left", "bottom-right",
+)
+DEFAULT_CORNER = "bottom-right"
 
 
 @dataclass
@@ -43,11 +50,18 @@ class Config:
     animation: str = DEFAULT_ANIMATION  # bundled file name or an absolute path
     animation_height: int = 260
     opacity: float = 1.0
-    screen_name: str = ""  # empty == primary screen
-    corner: str = "bottom-right"
+    screen_name: str = ""  # empty == primary screen, "*" == every screen
+    corner: str = DEFAULT_CORNER
+    # Per-monitor overrides, keyed by QScreen name. A monitor with no entry uses
+    # `corner` above. Kept separate from `corner` so unplugging a screen cannot
+    # lose its placement, and so one monitor can differ without disturbing the rest.
+    corner_by_screen: dict = field(default_factory=dict)
     margin_x: int = 24
     margin_y: int = 24
     show_caption: bool = True
+    # Off by default: a sound in an open office is something to opt into.
+    play_sound: bool = False
+    sound_name: str = "system"  # "system" or a file in assets/sounds
 
     # --- General ----------------------------------------------------------
     start_with_windows: bool = False
@@ -112,6 +126,15 @@ class Config:
         active = self.active_mode()
         return bool(active) and active.rule_enabled(rule)
 
+    def sound_enabled(self) -> bool:
+        """Whether a warning appearing right now should make a sound.
+
+        The Appearance option is the master switch; the mode in force (which the
+        weekday schedule picks) can then silence it for that day.
+        """
+        active = self.active_mode()
+        return self.play_sound and (active is None or active.play_sound)
+
     @property
     def watched_group_ids(self) -> list[int]:
         """Groups the mode in force watches. Empty means every visible group."""
@@ -128,6 +151,26 @@ class Config:
         except ValueError:
             return None
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    def corner_for(self, screen_name: str) -> str:
+        """Where the warning sits on a given monitor.
+
+        Falls back to the shared corner, so a new monitor behaves like the rest
+        until someone says otherwise.
+        """
+        override = (self.corner_by_screen or {}).get(screen_name or "")
+        if override in VALID_CORNERS:
+            return override
+        return self.corner if self.corner in VALID_CORNERS else DEFAULT_CORNER
+
+    def set_corner_for(self, screen_name: str, corner: str) -> None:
+        """Pin a monitor to a corner, or pass "" to let it follow the default."""
+        if not screen_name:
+            return
+        if corner in VALID_CORNERS:
+            self.corner_by_screen[screen_name] = corner
+        else:
+            self.corner_by_screen.pop(screen_name, None)
 
     def is_paused(self) -> bool:
         """True when alerts are suppressed right now (expired pauses clear themselves)."""
@@ -168,6 +211,19 @@ class Config:
         cfg.poll_seconds = max(10, int(cfg.poll_seconds))
         cfg.animation_height = max(80, min(900, int(cfg.animation_height)))
         cfg.opacity = max(0.2, min(1.0, float(cfg.opacity)))
+        if cfg.corner not in VALID_CORNERS:
+            log.info("unknown corner %r; using %r", cfg.corner, DEFAULT_CORNER)
+            cfg.corner = DEFAULT_CORNER
+        # Keep only entries that still mean something. Names of monitors that are
+        # not connected right now are deliberately kept: docking and undocking must
+        # not throw away where someone put the warning.
+        cfg.corner_by_screen = {
+            str(name): value
+            for name, value in (cfg.corner_by_screen or {}).items()
+            if str(name) and value in VALID_CORNERS
+        }
+        if cfg.sound_name not in sound.VALID:
+            cfg.sound_name = sound.DEFAULT
         if not cfg.client_id:
             cfg.client_id = CLIENT_ID
 
