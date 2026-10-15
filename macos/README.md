@@ -14,6 +14,19 @@ Zendesk sign-in, pause options, and the cat.
 > shared logic is covered by the same 128 automated checks as the Windows build, and
 > `tools/preflight.py` verifies the macOS-specific layer in one command. Run that first.
 
+## Quick install (one command)
+
+On the Mac, in Terminal — no sudo needed:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/macos/get.sh | bash
+```
+
+`get.sh` checks for the Xcode command line tools and a suitable Python, downloads the
+latest source from GitHub, builds the app and installs it to `~/Applications`. Run it
+again any time to update; your settings and sign-in are kept. Add `-s -- --no-autostart`
+after `bash` for options (see the top of the script).
+
 ## Start here
 
 **[INSTALL.md](INSTALL.md)** is the step-by-step guide: what you need, how to build it,
@@ -171,6 +184,7 @@ zwl/settings_ui.py       settings dialog
 zwl/config.py            settings model and persistence
 zwl/icons.py             icons built from the cat GIF's first frame
 
+get.sh                   one-step: download from GitHub, build, install
 build.sh                 .app + .dmg
 install.sh               per-user install, login item
 uninstall.sh             reverses it
