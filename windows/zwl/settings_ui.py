@@ -61,7 +61,7 @@ class _CallThread(QThread):
 
 class SettingsDialog(QDialog):
     saved = Signal(object)      # Config
-    signed_in = Signal()        # a new user signed in; the monitor must restart
+    signed_in = Signal(str, str)  # subdomain, client_id; the monitor must restart
     signed_out = Signal()
 
     def __init__(self, config: Config, tokens: TokenStore, parent=None):
@@ -1020,7 +1020,7 @@ class SettingsDialog(QDialog):
         self._my_group_ids = None
         self._refresh_account_state()
         self._render_groups()
-        self.signed_in.emit()
+        self.signed_in.emit(self._config.subdomain, self._config.client_id)
         QMessageBox.information(
             self, "Signed in",
             "Signed in as {} <{}>.\n\nNow pick the groups to watch on the Groups "

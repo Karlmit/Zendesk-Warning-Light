@@ -457,8 +457,15 @@ class WarningLightApp(QObject):
         dialog.raise_()
         dialog.activateWindow()
 
-    @Slot()
-    def _on_signed_in(self) -> None:
+    @Slot(str, str)
+    def _on_signed_in(self, subdomain: str, client_id: str) -> None:
+        # The refresh token only works against the account that issued it, so save
+        # that account now rather than waiting for Save. Otherwise the monitor - and
+        # the next start - point the token back at the old (default) subdomain.
+        self._config.subdomain = subdomain
+        self._config.client_id = client_id
+        self._config.save()
+        self.config_changed.emit(self._config_copy())
         self._auth_ok = True
         self._last_error = ""
         self.sign_in_reset_requested.emit()
