@@ -70,7 +70,7 @@ fi
 TARGET="$DEST/$APP_NAME.app"
 mkdir -p "$DEST" 2>/dev/null || true
 if [[ ! -w "$DEST" ]]; then
-  die "$DEST is not writable. Re-run without --system, or use sudo."
+  die "$DEST is not writable. Re-run without --system, or ask an administrator to make it writable."
 fi
 
 say "Installing to $TARGET"

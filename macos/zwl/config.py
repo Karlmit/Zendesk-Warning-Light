@@ -46,6 +46,16 @@ def normalise_subdomain(value: Any) -> str:
     return text if _SUBDOMAIN_RE.fullmatch(text) else ""
 
 
+def is_network_path(value: Any) -> bool:
+    """True for a UNC path such as \\\\host\\share\\x.gif.
+
+    Merely checking whether one exists makes Windows sign in to that host over SMB,
+    which hands it the user's NTLM hash.
+    """
+    text = str(value or "")
+    return len(text) >= 2 and text[0] in "\\/" and text[1] in "\\/"
+
+
 @dataclass
 class Config:
     # --- Connection -------------------------------------------------------
@@ -96,6 +106,8 @@ class Config:
         """Resolve :attr:`animation` to a concrete file path."""
         from pathlib import Path
 
+        if is_network_path(self.animation):
+            return str(assets_dir() / DEFAULT_ANIMATION)
         candidate = Path(self.animation)
         if candidate.is_absolute():
             return str(candidate)
@@ -245,6 +257,9 @@ class Config:
             for name, value in (cfg.corner_by_screen or {}).items()
             if str(name) and value in VALID_CORNERS
         }
+        if is_network_path(cfg.animation):
+            log.warning("ignoring network animation path %r", cfg.animation)
+            cfg.animation = DEFAULT_ANIMATION
         if cfg.sound_name not in sound.VALID:
             cfg.sound_name = sound.DEFAULT
         if not cfg.client_id:

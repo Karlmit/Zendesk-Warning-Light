@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-21
 **Scope:** Whole repository: `windows/` and `macos/` app code (`zwl/*`), tools, build and install scripts, installers (Inno Setup, Intune, PowerShell, shell), dependency manifests, and full git history.
-**Method:** Manual review, split across four parallel reviewers (auth/secrets, app/API/UI, macOS packaging, Windows packaging), then cross-checked and merged.
+**Method:** Manual review, split across four parallel reviewers (auth/secrets, app/API/UI, macOS packaging, Windows packaging), then cross-checked and merged. A second pass on the same day re-read the app code, installers and the first pass's fixes, and added M7, L22 and I15. A follow-up fixed every open item that could be fixed and checked here: L20, L21, I11, I12 and I15.
 
 ## Summary
 
@@ -10,14 +10,14 @@
 |---|---|---|---|
 | Critical | 0 | 0 | 0 |
 | High | 0 | 0 | 0 |
-| Medium | 6 | 5 | 1 |
-| Low | 21 | 18 | 3 |
-| Info | 14 | 6 | 8 |
+| Medium | 7 | 6 | 1 |
+| Low | 22 | 21 | 1 |
+| Info | 15 | 9 | 6 |
 
 Nothing was found that a remote attacker could exploit on its own. The most important fixes:
 
 - The Zendesk subdomain is now validated, so OAuth codes, refresh tokens and access tokens can't be sent to another host.
-- The bearer token is now only ever sent to the configured Zendesk host.
+- The bearer token is now only ever sent to the configured Zendesk host. The second pass closed a bypass of this check through relative paths (M7).
 - A silent machine-wide install no longer starts the app as SYSTEM.
 - The `curl | bash` installer can no longer run halfway if the download is cut off.
 - The installer's downloads can no longer be downgraded to plain HTTP (man-in-the-middle).
@@ -25,7 +25,8 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
 **Git history:** I searched all 28 commits for secrets and found none. The repo contains only the public OAuth client id (`warning_light_desktop`), the `yourcompany` placeholder and test dummies.
 
 **Verification:**
-- All 9 macOS and 10 Windows test scripts pass, run with PySide6 and offscreen Qt.
+- All 9 macOS and 10 Windows test scripts pass, run with PySide6 and offscreen Qt. They were re-run after the second-pass and follow-up fixes, and `shellcheck` passes on `macos/install.sh`.
+- The M7 and L22 fixes were also checked with targeted cases on both platforms (see those entries).
 - `python -m py_compile` passes on every changed Python file.
 - `bash -n` and `shellcheck` pass on all shell scripts.
 - `.ps1`, `.iss` and `.cmd` changes were checked by reading only, because PowerShell and Inno Setup (ISCC) aren't available on this Linux host. **Please build and smoke-test the Windows installer, and run the macOS installer, before you release.**
@@ -74,6 +75,16 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
   - Publish tagged releases and point the README one-liner at a tag.
   - Optionally publish a SHA-256 of the download and check it in the script.
 
+### M7. The M2 host check could be bypassed by a value without a scheme — FIXED (second pass)
+- **Files:** `{macos,windows}/zwl/zendesk.py` (`_url`)
+- **Issue:** `_url()` only checked the host when the value started with `http://` or `https://`. Anything else was pasted straight after the base URL, so the host could still be moved:
+  - `@evil.com/x` became `https://acme.zendesk.com@evil.com/x`, and the real host is `evil.com`. The Zendesk part is just the userinfo.
+  - `.evil.com/x` became `https://acme.zendesk.com.evil.com/x`.
+  - `:443@evil.com/x` also went to `evil.com`.
+  
+  `groups()` passes the response's `next_page` to `get()`, so a tampered response with a `next_page` like this one sent the bearer token off-host. That is exactly what M2 was meant to stop. It needs the same tampered API response as M2 to exploit, so it has the same rating.
+- **Fix:** `_url()` only treats a value as relative when it starts with a single `/`. Everything else is taken as a full URL. Either way, it compares the scheme and the full `netloc` (userinfo included) of the URL that will actually be requested against `base_url`. All of these are now refused before any request is sent: the three values above, `//evil.com/x`, `HTTPS://evil.com/x`, `https://u@acme.zendesk.com/x`, `http://acme.zendesk.com/x` and the bare `api/v2`. Normal relative paths and same-host `next_page` links still work.
+
 ---
 
 ## Low
@@ -99,8 +110,9 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
 | L17 | The LaunchAgent plist was built by pasting `$HOME` into the XML, so `&` or `<` in the path broke it | `macos/install.sh` | **Fixed.** Fixed template; path written with `plutil -replace`; `chmod 644` |
 | L18 | `run.command` carried on after errors | `macos/run.command` | **Fixed.** `set -euo pipefail` |
 | L19 | macOS Keychain: the refresh token briefly appears in the `security … -w <token>` command line, and items made by the `security` tool can be read by any process of the same user | `macos/zwl/keystore.py` | **Open.** Couldn't be tested here, and a change could break token storage. Recommendation: use `SecItemAdd`/`SecItemCopyMatching` via ctypes or pyobjc |
-| L20 | Uninstall deletes the whole `{app}` folder; if a user picked an existing folder, its contents are lost | `ZendeskWarningLight.iss` | **Open.** Changes the install flow. Recommendation: `DisableDirPage=yes`, or drop the `[UninstallDelete]` entry |
-| L21 | Windows build uses Python 3.10, which reaches end of life in October 2026 | `windows/build.ps1` | **Open.** Recommendation: build with 3.12 or 3.13 |
+| L20 | Uninstall deletes the whole `{app}` folder; if a user picked an existing folder, its contents are lost | `ZendeskWarningLight.iss` | **Fixed.** `DisableDirPage=yes`, so the installer always uses its own `{autopf}\ZendeskWarningLight` folder. An admin can still pass `/DIR=` on the command line, and the uninstaller deletes that folder too |
+| L21 | Windows build uses Python 3.10, which reaches end of life in October 2026 | `windows/build.ps1` | **Fixed.** `build.ps1` now uses `py -3.12`; the top-level README says so. Build machines need Python 3.12 installed |
+| L22 | The animation setting accepted any absolute path, including a UNC path such as `\\host\share\x.gif`. On Windows, just checking whether it exists (at startup and on every settings change) makes Windows connect to that host over SMB and send the user's NTLM hash. This is the same leak as L10, through the animation setting instead of the sound. It needs a crafted `config.json` or a user picking a network file. Found in the second pass | `{macos,windows}/zwl/config.py` | **Fixed.** New `config.is_network_path()` matches any path starting with two slashes or backslashes (`\\host`, `//host`, `\\?\UNC\…`). `Config.from_dict` resets such a value to the bundled animation, and `animation_path()` never returns one, as a second layer. Local absolute paths still work |
 | — | Hash-pinned lock files | both platforms | **Open.** Recommendation: `pip-compile --generate-hashes` plus `--require-hashes` for reproducible builds that show tampering |
 
 ## Info
@@ -117,10 +129,11 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
 | I8 | Responses are read with no size limit | Open. Low risk: page sizes are capped and the host is enforced (M2) |
 | I9 | `xattr -dr com.apple.quarantine` / ad-hoc signing / `codesign --deep` | Open. Recommendation: Developer ID signing and notarization for distributed builds |
 | I10 | Python is found on the user's PATH, and Homebrew may install Python without asking | Open. Crosses no privilege boundary |
-| I11 | The `--system` error message says "or use sudo" although the script refuses to run as root | Open (cosmetic) |
-| I12 | `.cmd` files are stored with LF line endings, which cmd can mishandle around `goto` labels | Open. Recommendation: `.gitattributes` with `*.cmd text eol=crlf` and `*.bat text eol=crlf` |
+| I11 | The `--system` error message says "or use sudo" although the script refuses to run as root | **Fixed.** Now says to re-run without `--system` or ask an administrator to make the folder writable (`macos/install.sh`) |
+| I12 | `.cmd` files are stored with LF line endings, which cmd can mishandle around `goto` labels | **Fixed.** New `.gitattributes` with `*.cmd text eol=crlf` and `*.bat text eol=crlf`. Git still stores them with LF, so the diff shows no content change; any checkout, Windows included, gets CRLF. The local copies were converted to match |
 | I13 | Launcher and Intune uninstall fall back to the HKCU uninstall entry | Open. No privilege boundary is crossed in supported flows |
 | I14 | Per-user uninstall uses `ExecutionPolicy Bypass` on its own script | Open. ExecutionPolicy is not a security boundary |
+| I15 | `tokens.json` doesn't record which Zendesk account issued the refresh token. The account comes from `config.json` alone. If `config.json` is changed to another subdomain while signed in (Settings blocks this, but hand-editing doesn't), the refresh token is sent to that other `*.zendesk.com` account. Only a process running as the same user can do this, and such a process can already decrypt the token | **Fixed** (`{macos,windows}/zwl/auth.py`). `tokens.json` now saves the account that issued the token (`base_url`). `access_token()` and the refresh refuse to run when the configured account differs; the error says to sign out and sign in again, and nothing is sent. The token is kept, so undoing the edit fixes it. An older `tokens.json` without the field is pinned to the account configured when it is first loaded. Tested on both platforms: a legacy file is pinned, a changed subdomain is refused with no request sent, undoing the change works again, and sign-out clears the binding |
 
 ## Checked and fine
 
@@ -156,4 +169,11 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
 
 `install/install-macos.sh`, `README.md`, `macos/README.md`, `macos/{build.sh,install.sh,run.command,requirements.txt}`, `macos/tools/verify_oauth.py`, `macos/zwl/{auth,config,keystore,monitor,overlay,paths,settings_ui,sound,zendesk}.py`, `windows/{.gitignore,README.md,build.ps1,install.ps1,requirements.txt}`, `windows/installer/{ZendeskWarningLight.iss,Intune-Install.cmd,Intune-Uninstall.cmd,uninstall.ps1}`, `windows/tools/verify_oauth.py`, `windows/zwl/{auth,config,keystore,monitor,overlay,settings_ui,sound,zendesk}.py`, new `.gitignore`, new `SECURITY_REPORT.md`.
 
-Your uncommitted changes in `windows/zwl/app.py` and `windows/zwl/settings_ui.py` (the `signed_in(str, str)` signal and saving the subdomain/client id on sign-in) were kept as they were. Nothing was staged or committed.
+Second pass and follow-up (left uncommitted for review):
+- `{macos,windows}/zwl/zendesk.py` (M7)
+- `{macos,windows}/zwl/config.py` (L22)
+- `{macos,windows}/zwl/auth.py` (I15)
+- `windows/installer/ZendeskWarningLight.iss` (L20)
+- `windows/build.ps1` and `README.md` (L21; the README also lists the current dependency ranges)
+- `macos/install.sh` (I11)
+- new `.gitattributes`, plus the three `.cmd`/`.bat` files converted to CRLF (I12)

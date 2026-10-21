@@ -24,7 +24,7 @@ $python = Join-Path $venv 'Scripts\python.exe'
 
 if (-not (Test-Path $python)) {
     Write-Host 'Creating virtual environment...' -ForegroundColor Cyan
-    py -3.10 -m venv $venv
+    py -3.12 -m venv $venv
 }
 
 Write-Host 'Installing dependencies...' -ForegroundColor Cyan

@@ -188,6 +188,9 @@ class TokenStore:
     _refresh_token: str = ""
     _access_token: str = ""
     _expires_at: float = 0.0
+    # The account the refresh token came from. It is only ever sent back there,
+    # whatever config.json says now.
+    _issued_for: str = ""
     user: SignedInUser = field(default_factory=SignedInUser)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
@@ -208,6 +211,14 @@ class TokenStore:
                 k: v for k, v in (data.get("user") or {}).items()
                 if k in SignedInUser.__dataclass_fields__
             })
+            self._issued_for = data.get("base_url") or ""
+            if self._refresh_token and not self._issued_for:
+                # Saved before the account was recorded: it can only have come from
+                # the account configured now, so pin it to that.
+                try:
+                    self._issued_for = check_base_url(self.base_url)
+                except AuthError:
+                    pass
             # Access tokens are not persisted - they only last 30 minutes.
             self._access_token = ""
             self._expires_at = 0.0
@@ -219,6 +230,7 @@ class TokenStore:
         with self._lock:
             payload = {
                 "refresh_token_enc": keystore.encrypt(self._refresh_token),
+                "base_url": self._issued_for,
                 "user": self.user.to_dict(),
                 "saved_at": time.time(),
             }
@@ -234,6 +246,7 @@ class TokenStore:
             self._refresh_token = ""
             self._access_token = ""
             self._expires_at = 0.0
+            self._issued_for = ""
             self.user = SignedInUser()
         try:
             tokens_path().unlink(missing_ok=True)
@@ -269,6 +282,8 @@ class TokenStore:
         except Exception:
             log.warning("could not re-read %s while recovering a refresh", path)
             return False
+        if (data.get("base_url") or self._issued_for) != self._issued_for:
+            return False                # signed in to another account since
         stored = keystore.decrypt(data.get("refresh_token_enc", ""))
         if not stored or stored == already_tried:
             return False
@@ -277,12 +292,25 @@ class TokenStore:
 
     # --- getting a usable token ---------------------------------------- #
 
+    def _checked_base_locked(self) -> str:
+        """base_url, if it is a Zendesk address and the account that signed us in.
+
+        Caller must hold the lock. A hand-edited subdomain must not send this
+        account's tokens to a different Zendesk account.
+        """
+        base = check_base_url(self.base_url)
+        if self._issued_for and base != self._issued_for:
+            raise AuthExpired(
+                "You are signed in to {}, but the settings now point at {}. Sign out "
+                "and sign in again to switch accounts.".format(self._issued_for, base))
+        return base
+
     def access_token(self, force_refresh: bool = False) -> str:
         with self._lock:
             if not self._refresh_token and not self._access_token:
                 raise AuthExpired("You need to sign in to Zendesk.")
             # Callers send the token to base_url, so never hand it out for a bad one.
-            check_base_url(self.base_url)
+            self._checked_base_locked()
             fresh_enough = (
                 self._access_token
                 and time.time() < self._expires_at - REFRESH_MARGIN
@@ -297,7 +325,7 @@ class TokenStore:
     def _refresh_locked(self, allow_reload: bool = True) -> None:
         log.info("refreshing the Zendesk access token")
         attempted = self._refresh_token
-        token_url = check_base_url(self.base_url) + TOKEN_PATH
+        token_url = self._checked_base_locked() + TOKEN_PATH
         try:
             resp = requests.post(
                 token_url,
@@ -387,6 +415,7 @@ class TokenStore:
         with self._lock:
             self.base_url = base
             self.client_id = client_id
+            self._issued_for = base
             self._apply(payload)
             if not self._refresh_token:
                 raise AuthError(

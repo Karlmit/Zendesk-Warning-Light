@@ -51,13 +51,17 @@ class ZendeskClient:
         body. Every request carries the bearer token, so following one that points
         anywhere but the signed-in account would hand the token to that host.
         """
-        if not path.startswith(("http://", "https://")):
-            return self.base_url + path
-        base, target = urlsplit(self.base_url), urlsplit(path)
+        # A relative path is pasted straight after the host, so "@evil.com/x" or
+        # ".evil.com/x" would move the host too. Check the URL actually requested.
+        if path.startswith("/") and not path.startswith("//"):
+            url = self.base_url + path
+        else:
+            url = path
+        base, target = urlsplit(self.base_url), urlsplit(url)
         if (target.scheme, target.netloc.lower()) != (base.scheme, base.netloc.lower()):
             raise ZendeskError("Refusing to send the sign-in token to {}://{}".format(
                 target.scheme, target.netloc))
-        return path
+        return url
 
     def get(self, path: str, params: dict[str, Any] | None = None,
             _retry: bool = True) -> dict[str, Any]:

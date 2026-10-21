@@ -49,8 +49,8 @@ tokens live only on the machine that signed in (Windows: DPAPI; macOS: login Key
 
 ## Requirements
 
-- Python 3.10+ (3.10–3.13 on macOS, arm64 native — see `macos/README.md`)
-- `PySide6>=6.6`, `requests>=2.31` (see each platform's `requirements.txt`)
+- Python 3.12 for the Windows build (`build.ps1` uses `py -3.12`); 3.10–3.13 on macOS, arm64 native — see `macos/README.md`
+- `PySide6>=6.6,<7`, `requests>=2.32.4,<3` (see each platform's `requirements.txt`)
 
 ## Repository layout
 

@@ -56,7 +56,9 @@ PrivilegesRequiredOverridesAllowed=commandline
 DefaultDirName={autopf}\{#AppId}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-DisableDirPage=auto
+; No folder page: uninstall deletes the whole {app} folder, so it must never be
+; a folder that already held someone's files.
+DisableDirPage=yes
 AllowNoIcons=yes
 
 ; Built into build\ as an internal payload. The shipped, versioned filename is
