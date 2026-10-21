@@ -29,7 +29,9 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
 - The M7 and L22 fixes were also checked with targeted cases on both platforms (see those entries).
 - `python -m py_compile` passes on every changed Python file.
 - `bash -n` and `shellcheck` pass on all shell scripts.
-- `.ps1`, `.iss` and `.cmd` changes were checked by reading only, because PowerShell and Inno Setup (ISCC) aren't available on this Linux host. **Please build and smoke-test the Windows installer, and run the macOS installer, before you release.**
+- PowerShell 7.6 was installed on the Linux host. All three `.ps1` scripts parse, and PSScriptAnalyzer reports only style warnings (`Write-Host`, `ShouldProcess`), no errors.
+- Inno Setup 6.7.3 was run under Wine 9.0. `ZendeskWarningLight.iss` and `Launcher.iss` both compile, using placeholder files in place of the PyInstaller build. The resulting `Setup.exe /S` installed per user (files, HKCU Run value) and `Setup.exe /S /uninstall` removed it, both with exit code 0.
+- Still not tested: the real PyInstaller build on Windows, the `.cmd` Intune wrappers, machine-wide `/ALLUSERS` installs as SYSTEM, and the macOS installer. **Please test these on real Windows and macOS machines before you release.**
 
 ---
 
