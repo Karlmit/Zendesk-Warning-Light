@@ -30,8 +30,14 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
 - `python -m py_compile` passes on every changed Python file.
 - `bash -n` and `shellcheck` pass on all shell scripts.
 - PowerShell 7.6 was installed on the Linux host. All three `.ps1` scripts parse, and PSScriptAnalyzer reports only style warnings (`Write-Host`, `ShouldProcess`), no errors.
-- Inno Setup 6.7.3 was run under Wine 9.0. `ZendeskWarningLight.iss` and `Launcher.iss` both compile, using placeholder files in place of the PyInstaller build. The resulting `Setup.exe /S` installed per user (files, HKCU Run value) and `Setup.exe /S /uninstall` removed it, both with exit code 0.
-- Still not tested: the real PyInstaller build on Windows, the `.cmd` Intune wrappers, machine-wide `/ALLUSERS` installs as SYSTEM, and the macOS installer. **Please test these on real Windows and macOS machines before you release.**
+- **Full Windows build under Wine 9.0**, following `build.ps1` step by step. Windows PowerShell and the `py` launcher don't run under Wine, so each step was run directly:
+  - Windows Python 3.12.10 (64-bit), a fresh venv, and `pip install -r requirements.txt "pyinstaller>=6.10,<7"`.
+  - All 10 Windows test scripts pass on Windows Python, including `test_autostart.py`, which writes to the real (Wine) registry.
+  - PyInstaller 6.22.3 built `dist\ZendeskWarningLight\ZendeskWarningLight.exe` with the version stamped (2.9.0).
+  - Inno Setup 6.7.3 compiled `ZendeskWarningLight.iss` and `Launcher.iss` around that build into `ZendeskWarningLight-Setup-2.9.0.exe` (38 MB).
+  - `Setup.exe /S` installed per user with the HKCU Run value and started the app. Launched again on its own, the app showed its tray icon and the first-run Settings dialog. `Setup.exe /S /uninstall` removed the app folder, the Run value and the uninstall entry. All exit codes were 0.
+  - **One difference from a real build:** PySide6 6.12 (the newest version `requirements.txt` allows) needs Windows' own `icuuc.dll`, which Wine 9 doesn't have, so this build used PySide6 6.8.3, which is also in range. A real Windows build will pick up 6.12.
+- Still not tested: the app on a real Windows PC with PySide6 6.12, signing in against a real Zendesk account, the `.cmd` Intune wrappers, machine-wide `/ALLUSERS` installs as SYSTEM, and the macOS installer. **Please test these on real Windows and macOS machines before you release.**
 
 ---
 
