@@ -173,7 +173,7 @@ Inno's own switches work too, and take precedence when you want to be explicit:
 | `/SUPPRESSMSGBOXES` | Suppress blocking message boxes |
 | `/NOAUTOSTART` | Do not start at login — removes any existing entry too |
 | `/DESKTOPICON` | Also create a desktop shortcut |
-| `/NOLAUNCH` | Do not start the app after installing |
+| `/NOLAUNCH` | Do not start the app after installing (it is never started when Setup runs as SYSTEM, e.g. Intune system context — users get it at their next sign-in) |
 | `/DIR="C:\path"` | Install somewhere else |
 | `/LOG="C:\file.log"` | Write an install log |
 | `/NORESTART` | Never reboot |

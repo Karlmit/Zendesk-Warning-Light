@@ -31,7 +31,7 @@ DEFAULT = SYSTEM
 
 
 def _resolve(name: str) -> Path | None:
-    if name != SYSTEM:
+    if name != SYSTEM and name in VALID:    # never a path taken from config
         path = assets_dir() / "sounds" / name
         if path.is_file():
             return path

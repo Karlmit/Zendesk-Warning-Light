@@ -53,8 +53,10 @@ def encrypt(plaintext: str) -> str:
         None, None, _CRYPTPROTECT_UI_FORBIDDEN, ctypes.byref(out),
     )
     if not ok:
-        log.warning("CryptProtectData failed (%s); storing secret obfuscated only", ctypes.get_last_error())
-        return "plain:" + base64.b64encode(plaintext.encode("utf-8")).decode("ascii")
+        # Never fall back to writing the secret readably: keep it in memory only, so
+        # this session works and the next start asks for a fresh sign-in.
+        log.warning("CryptProtectData failed (%s); secret not persisted", ctypes.get_last_error())
+        return ""
     try:
         return "dpapi:" + base64.b64encode(_read(out)).decode("ascii")
     finally:

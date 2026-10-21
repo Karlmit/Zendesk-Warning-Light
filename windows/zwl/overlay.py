@@ -139,7 +139,8 @@ class OverlayWindow(QWidget):
         if not source.exists():
             log.error("animation not found: %s", source)
             self._animation_label.setText(
-                "<span style='color:#ffb020'>Animation missing:<br>{}</span>".format(source.name)
+                "<span style='color:#ffb020'>Animation missing:<br>{}</span>".format(
+                    _escape(source.name))
             )
             self._animation_label.setFixedSize(240, 80)
             return
@@ -152,7 +153,8 @@ class OverlayWindow(QWidget):
         if not movie.isValid():
             log.error("Qt cannot decode %s", source)
             self._animation_label.setText(
-                "<span style='color:#ffb020'>Cannot decode {}</span>".format(source.name)
+                "<span style='color:#ffb020'>Cannot decode {}</span>".format(
+                    _escape(source.name))
             )
             self._animation_label.setFixedSize(240, 80)
             return

@@ -14,8 +14,10 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import html
 import http.server
 import os
+import re
 import secrets
 import sys
 import threading
@@ -58,6 +60,7 @@ def make_pkce() -> tuple[str, str]:
 
 class _Catcher(http.server.BaseHTTPRequestHandler):
     result: dict = {}
+    timeout = 10                        # an idle connection must not wedge the listener
 
     def do_GET(self) -> None:          # noqa: N802 - required name
         parsed = urllib.parse.urlparse(self.path)
@@ -71,7 +74,7 @@ class _Catcher(http.server.BaseHTTPRequestHandler):
         body = (
             "<h2>Signed in.</h2><p>You can close this tab and go back to the terminal.</p>"
             if ok else
-            "<h2>Sign-in failed.</h2><pre>{}</pre>".format(_Catcher.result)
+            "<h2>Sign-in failed.</h2><pre>{}</pre>".format(html.escape(str(_Catcher.result)))
         )
         payload = ("<html><body style='font-family:system-ui;padding:40px'>"
                    + body + "</body></html>").encode("utf-8")
@@ -149,6 +152,7 @@ def sign_in(base: str, port: int) -> dict:
             "scope": SCOPE,
         },
         timeout=30,
+        allow_redirects=False,
     )
     if not resp.ok:
         raise SystemExit("Token exchange failed ({}): {}".format(resp.status_code, resp.text[:400]))
@@ -169,6 +173,7 @@ def try_refresh(base: str, refresh_token: str) -> None:
             "refresh_token": refresh_token,
         },
         timeout=30,
+        allow_redirects=False,
     )
     if not resp.ok:
         print("   FAILED ({}): {}".format(resp.status_code, resp.text[:300]))
@@ -278,6 +283,8 @@ def main() -> int:
     args = parser.parse_args()
 
     CLIENT_ID = args.client_id
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", args.subdomain):
+        raise SystemExit("--subdomain must be just the part before .zendesk.com")
     base = "https://{}.zendesk.com".format(args.subdomain)
 
     print("=" * 68)
@@ -297,6 +304,7 @@ def main() -> int:
             try_refresh(base, token["refresh_token"])
     finally:
         server.shutdown()
+        server.server_close()
 
     print("\n" + "=" * 68)
     print("If every step above succeeded, the V2 auth design is sound.")

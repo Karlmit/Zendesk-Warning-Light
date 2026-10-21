@@ -1,0 +1,10 @@
+# Repo-wide safety net; macos/ and windows/ carry their own, more specific lists.
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.dmg
+.DS_Store
+._*
+.env

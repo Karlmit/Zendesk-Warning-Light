@@ -29,7 +29,8 @@ $Desktop      = Join-Path ([Environment]::GetFolderPath('Desktop')) "$AppName.ln
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Relaunched -and $here -eq $InstallDir) {
-    $copy = Join-Path $env:TEMP "$AppId-uninstall.ps1"
+    # Unique name, so nothing can pre-plant or swap a predictable script path.
+    $copy = Join-Path $env:TEMP ("$AppId-uninstall-{0}.ps1" -f [guid]::NewGuid())
     Copy-Item -Force $MyInvocation.MyCommand.Path $copy
     $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$copy`"", '-Relaunched')
     if ($RemoveSettings) { $arguments += '-RemoveSettings' }
@@ -41,7 +42,10 @@ Write-Host "Uninstalling $AppName..." -ForegroundColor Cyan
 
 # --- stop the app ----------------------------------------------------------
 
-$running = Get-Process $AppId -ErrorAction SilentlyContinue
+# Only this session's copy: other users' processes cannot be stopped without admin
+# rights, and with ErrorActionPreference=Stop trying would abort the script.
+$mySession = (Get-Process -Id $PID).SessionId
+$running = Get-Process $AppId -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $mySession }
 if ($running) {
     $running | Stop-Process -Force
     Start-Sleep -Seconds 2
@@ -100,4 +104,7 @@ if ($RemoveSettings) {
 
 Write-Host ''
 Write-Host "$AppName has been removed." -ForegroundColor Green
-if ($Relaunched) { Start-Sleep -Seconds 4 }
+if ($Relaunched) {
+    Remove-Item -Force $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue   # the temp copy
+    Start-Sleep -Seconds 4
+}

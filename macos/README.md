@@ -19,7 +19,7 @@ Zendesk sign-in, pause options, and the cat.
 On the Mac, in Terminal — no sudo needed:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/install/install-macos.sh | bash
+curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/install/install-macos.sh | bash
 ```
 
 `install-macos.sh` checks for the Xcode command line tools and a suitable Python, downloads the

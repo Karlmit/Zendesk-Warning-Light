@@ -26,6 +26,9 @@ rem ===========================================================================
 
 setlocal enabledelayedexpansion
 
+rem System tools by absolute path: cmd looks in the current directory first, and
+rem this may run as SYSTEM. %SystemRoot% has no spaces, so no quoting needed.
+set "SYS32=%SystemRoot%\System32"
 set "KEY=SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{8F3A1C6E-5B27-4E19-9C4D-7A2E6B0D9F31}_is1"
 set "PURGE=0"
 if /i "%~1"=="--purge" set "PURGE=1"
@@ -38,7 +41,7 @@ set "HIVE="
 for %%H in (HKLM HKCU) do (
   if not defined UNINST (
     for /f "tokens=2,*" %%A in (
-      'reg query "%%H\%KEY%" /v UninstallString 2^>nul ^| find /i "UninstallString"'
+      '%SYS32%\reg.exe query "%%H\%KEY%" /v UninstallString 2^>nul ^| %SYS32%\find.exe /i "UninstallString"'
     ) do (
       set "UNINST=%%B"
       set "HIVE=%%H"
@@ -46,7 +49,7 @@ for %%H in (HKLM HKCU) do (
     )
     if defined UNINST (
       for /f "tokens=2,*" %%C in (
-        'reg query "%%H\%KEY%" /v InstallLocation 2^>nul ^| find /i "InstallLocation"'
+        '%SYS32%\reg.exe query "%%H\%KEY%" /v InstallLocation 2^>nul ^| %SYS32%\find.exe /i "InstallLocation"'
       ) do set "TARGET=%%D"
     )
   )
@@ -73,7 +76,7 @@ set /a WAITED=0
 :wait
 rem Test errorlevel on the very next line: any command in between - even a plain
 rem SET, which always succeeds - resets it to 0 and the check becomes useless.
-reg query "%HIVE%\%KEY%" >nul 2>&1
+"%SYS32%\reg.exe" query "%HIVE%\%KEY%" >nul 2>&1
 if errorlevel 1 (set "KEYGONE=1") else (set "KEYGONE=0")
 
 set "DIRGONE=1"
@@ -84,7 +87,7 @@ if %WAITED% GEQ 120 goto timeout
 rem ping, not timeout.exe: timeout refuses to wait when its output is redirected
 rem ("input redirection is not supported") and returns instantly, which turns this
 rem into a busy spin that hits the limit in a few seconds.
-ping -n 3 127.0.0.1 >nul 2>&1
+"%SYS32%\ping.exe" -n 3 127.0.0.1 >nul 2>&1
 set /a WAITED+=2
 goto wait
 

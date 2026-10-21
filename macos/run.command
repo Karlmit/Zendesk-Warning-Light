@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Double-click to run Zendesk Warning Light from source, without building an app.
+set -euo pipefail
 cd "$(dirname "$0")"
 if [[ ! -x .venv/bin/python ]]; then
   echo "Setting up the virtual environment (first run only)..."

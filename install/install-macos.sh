@@ -3,22 +3,29 @@
 # One-step installer: downloads Zendesk Warning Light from GitHub, builds it, and
 # installs it for the current user. No sudo, no admin rights.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/install/install-macos.sh | bash
+#   curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/install/install-macos.sh | bash
 #
 # Options go after `-s --`, for example:
 #
-#   curl -fsSL .../install-macos.sh | bash -s -- --no-autostart
+#   curl --proto '=https' --tlsv1.2 -fsSL .../install-macos.sh | bash -s -- --no-autostart
 #
 #   --no-autostart   do not start the app at login
 #   --no-launch      install but do not start it now
 #   --keep           keep the downloaded source in ~/Library/Caches/ZendeskWarningLight
 #
-# Environment: ZWL_REF picks a branch, tag or commit (default: main).
+# Environment: ZWL_REF picks a branch, tag or commit (default: main). Pinning it
+# to a release tag or a full commit hash (ZWL_REF=v2.9.0 ...) builds exactly that
+# reviewed source instead of whatever is on main right now.
 #
 # Run it again at any time to update: it always downloads the latest source and
 # replaces the installed app. Your settings and sign-in are kept.
 
 set -euo pipefail
+
+# Everything lives inside main(), which is only called on the very last line. When
+# this is piped into bash, a download cut off part-way therefore defines a function
+# that never runs, instead of executing the first half of the script.
+main() {
 
 REPO="Karlmit/Zendesk-Warning-Light"
 REF="${ZWL_REF:-main}"
@@ -109,12 +116,12 @@ say "Using $PY"
 # --- 3. download the source -------------------------------------------------
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/zwl.XXXXXX")"
-cleanup() { rm -rf "$WORK"; }
+cleanup() { [[ -n "${WORK:-}" ]] && rm -rf "$WORK"; }
 trap cleanup EXIT
 
 URL="https://github.com/$REPO/archive/$REF.tar.gz"
 say "Downloading $REPO ($REF)..."
-curl -fsSL "$URL" -o "$WORK/src.tar.gz" \
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL "$URL" -o "$WORK/src.tar.gz" \
   || die "Could not download $URL
 Check your internet connection, and that '$REF' exists."
 
@@ -139,3 +146,7 @@ PYTHON="$PY" ./install.sh --force ${PASS[@]+"${PASS[@]}"}
 
 echo
 ok "Done. To update later, run the same command again."
+
+}
+
+main "$@"

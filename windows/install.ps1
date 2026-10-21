@@ -50,7 +50,10 @@ if (-not (Test-Path (Join-Path $BuildDir "$AppId.exe"))) {
 
 # --- 2. stop any running copy ----------------------------------------------
 
-$running = Get-Process $AppId -ErrorAction SilentlyContinue
+# Only this session's copy: other users' processes cannot be stopped without admin
+# rights, and with ErrorActionPreference=Stop trying would abort the script.
+$mySession = (Get-Process -Id $PID).SessionId
+$running = Get-Process $AppId -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $mySession }
 if ($running) {
     Write-Host 'Closing the running copy...' -ForegroundColor Cyan
     $running | Stop-Process -Force

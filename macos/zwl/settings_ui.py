@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from . import autostart, changelog, modes, overlay, sound
 from .auth import AuthError, TokenStore
-from .config import Config, DEFAULT_CORNER
+from .config import Config, DEFAULT_CORNER, normalise_subdomain
 from .paths import assets_dir, data_dir, log_path
 from .zendesk import ZendeskClient, ZendeskError
 
@@ -965,15 +965,20 @@ class SettingsDialog(QDialog):
         thread.start()
 
     def _show_error(self, message: str) -> None:
-        QMessageBox.critical(self, "Zendesk", message)
+        # Errors can quote Zendesk's reply; never let Qt guess it is rich text.
+        _plain_message(self, QMessageBox.Critical, "Zendesk", message)
 
     # --- sign in / out ----------------------------------------------------
 
     def _on_sign_in(self) -> None:
-        subdomain = self.subdomain_edit.text().strip().replace(".zendesk.com", "")
+        typed = self.subdomain_edit.text().strip()
+        subdomain = normalise_subdomain(typed)
         client_id = self.client_id_edit.text().strip()
-        if not subdomain:
+        if not typed:
             QMessageBox.warning(self, "Missing subdomain", "Enter your Zendesk subdomain.")
+            return
+        if not subdomain:
+            QMessageBox.warning(self, "Invalid subdomain", INVALID_SUBDOMAIN)
             return
         if not client_id:
             QMessageBox.warning(self, "Missing OAuth client",
@@ -999,8 +1004,8 @@ class SettingsDialog(QDialog):
         self._refresh_account_state()
         self._render_groups()
         self.signed_in.emit(self._config.subdomain, self._config.client_id)
-        QMessageBox.information(
-            self, "Signed in",
+        _plain_message(
+            self, QMessageBox.Information, "Signed in",
             "Signed in as {} <{}>.\n\nNow pick the groups to watch on the Groups "
             "tab.".format(user.name, user.email))
         self._on_load_groups()
@@ -1122,6 +1127,9 @@ class SettingsDialog(QDialog):
         if not cfg.subdomain:
             QMessageBox.warning(self, "Missing subdomain", "Enter your Zendesk subdomain.")
             return
+        if not self._tokens.is_signed_in and not _valid_subdomain(cfg.subdomain):
+            QMessageBox.warning(self, "Invalid subdomain", INVALID_SUBDOMAIN)
+            return
         if not self._tokens.is_signed_in:
             confirm = QMessageBox.question(
                 self, "Not signed in",
@@ -1150,6 +1158,23 @@ class SettingsDialog(QDialog):
 
     def show_modes_tab(self) -> None:
         self._tabs.setCurrentIndex(1)
+
+
+INVALID_SUBDOMAIN = ("Enter just the subdomain - the part before .zendesk.com - "
+                     "using letters, digits and hyphens.")
+
+
+def _valid_subdomain(subdomain: str) -> bool:
+    # Same rule as config.normalise_subdomain: one DNS label, or the subdomain
+    # would turn https://<it>.zendesk.com into an address on some other host.
+    return bool(normalise_subdomain(subdomain))
+
+
+def _plain_message(parent, icon, title: str, text: str) -> None:
+    """A message box that shows ``text`` literally, never as HTML."""
+    box = QMessageBox(icon, title, text, QMessageBox.Ok, parent)
+    box.setTextFormat(Qt.PlainText)
+    box.exec()
 
 
 def _escape(text: str) -> str:

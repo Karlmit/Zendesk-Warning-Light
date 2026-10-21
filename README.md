@@ -22,7 +22,7 @@ Full behavior — the alert rules, day modes, tray menu, authentication, trouble
 | **macOS** (Apple Silicon) | [`macos/README.md`](macos/README.md) · [`macos/INSTALL.md`](macos/INSTALL.md) |
 
 **Quick install on a Mac:** run
-`curl -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/install/install-macos.sh | bash`
+`curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Karlmit/Zendesk-Warning-Light/main/install/install-macos.sh | bash`
 — it downloads everything from GitHub, builds the app and installs it. See
 [`install/`](install/).
 

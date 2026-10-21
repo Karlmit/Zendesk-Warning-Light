@@ -37,7 +37,9 @@ def play_alert(name: str = DEFAULT) -> None:
     try:
         if winsound is not None:
             path = assets_dir() / "sounds" / name
-            if name != SYSTEM and path.is_file():
+            # Only the bundled files: a path from config (e.g. a UNC share) must
+            # never reach PlaySound.
+            if name != SYSTEM and name in VALID and path.is_file():
                 winsound.PlaySound(
                     str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
                 return

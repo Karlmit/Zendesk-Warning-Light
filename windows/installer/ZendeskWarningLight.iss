@@ -116,11 +116,14 @@ Root: HKA; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
 
 [Run]
 ; Interactive install: offer a "start now" checkbox on the final page.
+; runasoriginaluser: an /ALLUSERS install elevates, but the tray app must run as the
+; signed-in user, never with the installer's admin token.
 Filename: "{app}\{#AppExe}"; Description: "Start {#AppName} now"; \
-    Flags: nowait postinstall skipifsilent
+    Flags: nowait postinstall skipifsilent runasoriginaluser
 
 ; Silent install: start it straight away unless /NOLAUNCH was passed.
-Filename: "{app}\{#AppExe}"; Flags: nowait skipifnotsilent; Check: ShouldLaunchAfterSilent
+Filename: "{app}\{#AppExe}"; Flags: nowait skipifnotsilent runasoriginaluser; \
+    Check: ShouldLaunchAfterSilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
@@ -166,10 +169,13 @@ begin
   Result := not ((Value = '0') or (Value = '') or (Value = 'NO') or (Value = 'FALSE'));
 end;
 
-// Honour /NOLAUNCH (or /NOLAUNCH=1) during a silent install.
+// Honour /NOLAUNCH (or /NOLAUNCH=1) during a silent install. Never launch as
+// SYSTEM (Intune system context): the app would sit invisibly in session 0 with
+// SYSTEM's rights until reboot. Users get it from the Run key at their next login.
 function ShouldLaunchAfterSilent: Boolean;
 begin
-  Result := not SwitchIsOn('NOLAUNCH');
+  Result := not SwitchIsOn('NOLAUNCH')
+    and (Pos('\SYSTEMPROFILE\', Uppercase(ExpandConstant('{localappdata}'))) = 0);
 end;
 
 // Interactive installs follow the wizard checkbox; silent installs follow the
@@ -274,7 +280,9 @@ var
 begin
   // As SYSTEM this reaches every logged-in session, which is what a machine-wide
   // upgrade needs; as a normal user it only reaches that user's own copy.
-  Exec(ExpandConstant('{cmd}'), '/C taskkill /IM "{#AppExe}" /F', '',
+  // Absolute path, no cmd.exe: cmd searches the current directory first, so a bare
+  // "taskkill" could resolve to a planted exe when Setup runs elevated.
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM "{#AppExe}" /F', '',
        SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 

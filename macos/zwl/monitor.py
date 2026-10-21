@@ -165,7 +165,11 @@ class Monitor(QObject):
         self._tickets = {int(k): v for k, v in data.get("tickets", {}).items()}
         for raw in data.get("alerts", []):
             try:
-                self._alerts[int(raw["ticket_id"])] = Alert(**raw)
+                alert = Alert(**raw)
+                # The id ends up in a ticket URL and the rich-text caption, so a
+                # hand-edited state file must not smuggle anything else in.
+                alert.ticket_id = int(alert.ticket_id)
+                self._alerts[alert.ticket_id] = alert
             except Exception:
                 continue
         log.info("restored %d tracked tickets and %d live alerts",

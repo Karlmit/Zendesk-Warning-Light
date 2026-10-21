@@ -36,7 +36,8 @@ rem --- who are we? S-1-5-18 is the well-known SID of LocalSystem -------------
 set "MODE=/CURRENTUSER"
 set "CONTEXT=a user account - installing for this user only"
 
-whoami /user 2>nul | find /i "S-1-5-18" >nul
+rem System tools by absolute path: cmd looks in the current directory first.
+"%SystemRoot%\System32\whoami.exe" /user 2>nul | "%SystemRoot%\System32\find.exe" /i "S-1-5-18" >nul
 if not errorlevel 1 (
   set "MODE=/ALLUSERS"
   set "CONTEXT=SYSTEM - installing machine-wide for all users"

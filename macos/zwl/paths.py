@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -55,7 +56,11 @@ def assets_dir() -> Path:
 def data_dir() -> Path:
     """Per-user writable directory for config, state and logs."""
     path = Path.home() / "Library" / "Application Support" / APP_NAME
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)       # older builds created it 0755; logs and tokens live here
+    except OSError:
+        pass
     return path
 
 

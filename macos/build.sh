@@ -72,7 +72,7 @@ PYV="$VENV/bin/python"
 
 say "Installing dependencies..."
 "$PYV" -m pip install --quiet --upgrade pip
-"$PYV" -m pip install --quiet -r requirements.txt pyinstaller
+"$PYV" -m pip install --quiet -r requirements.txt "pyinstaller>=6,<7"
 
 # zwl/__init__.py is the single source of truth for the version.
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' zwl/__init__.py)"

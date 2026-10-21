@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any, Iterable
+from urllib.parse import urlsplit
 
 import requests
 
@@ -43,9 +44,24 @@ class ZendeskClient:
 
     # --- plumbing ---------------------------------------------------------
 
+    def _url(self, path: str) -> str:
+        """Absolute URL for ``path``, refusing anything off the account's own host.
+
+        Pagination links (``next_page``) arrive as absolute URLs in the response
+        body. Every request carries the bearer token, so following one that points
+        anywhere but the signed-in account would hand the token to that host.
+        """
+        if not path.startswith(("http://", "https://")):
+            return self.base_url + path
+        base, target = urlsplit(self.base_url), urlsplit(path)
+        if (target.scheme, target.netloc.lower()) != (base.scheme, base.netloc.lower()):
+            raise ZendeskError("Refusing to send the sign-in token to {}://{}".format(
+                target.scheme, target.netloc))
+        return path
+
     def get(self, path: str, params: dict[str, Any] | None = None,
             _retry: bool = True) -> dict[str, Any]:
-        url = path if path.startswith("http") else self.base_url + path
+        url = self._url(path)
         try:
             token = self._tokens.access_token()
         except AuthError:
@@ -65,7 +81,10 @@ class ZendeskClient:
             return self.get(path, params, _retry=False)
 
         if resp.status_code == 429:
-            wait = min(int(resp.headers.get("Retry-After", "10")), 60)
+            try:
+                wait = max(0, min(int(resp.headers.get("Retry-After", "10")), 60))
+            except ValueError:          # an HTTP-date, or junk
+                wait = 10
             log.warning("rate limited on %s, sleeping %ss", path, wait)
             time.sleep(wait)
             if _retry:
@@ -85,7 +104,7 @@ class ZendeskClient:
 
     def probe(self, path: str, params: dict[str, Any] | None = None) -> int:
         """HTTP status for a call we expect might be forbidden. Never raises on 4xx."""
-        url = path if path.startswith("http") else self.base_url + path
+        url = self._url(path)
         token = self._tokens.access_token()
         try:
             resp = self._session.get(

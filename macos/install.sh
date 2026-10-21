@@ -86,7 +86,10 @@ xattr -dr com.apple.quarantine "$TARGET" 2>/dev/null || true
 PLIST="$HOME/Library/LaunchAgents/com.yourcompany.zendeskwarninglight.plist"
 if [[ "$AUTOSTART" == "1" ]]; then
   mkdir -p "$HOME/Library/LaunchAgents"
-  cat > "$PLIST" <<PLISTEOF
+  # The heredoc is quoted so nothing is expanded into the XML; the one variable
+  # value (the app path, which contains $HOME) is set afterwards with plutil, which
+  # escapes it properly however odd the user's home folder name is.
+  cat > "$PLIST" <<'PLISTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -95,7 +98,7 @@ if [[ "$AUTOSTART" == "1" ]]; then
 	<string>com.yourcompany.zendeskwarninglight</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>$TARGET/Contents/MacOS/$APP_NAME</string>
+		<string>placeholder</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
@@ -108,6 +111,9 @@ if [[ "$AUTOSTART" == "1" ]]; then
 </dict>
 </plist>
 PLISTEOF
+  plutil -replace ProgramArguments.0 -string "$TARGET/Contents/MacOS/$APP_NAME" "$PLIST" \
+    || die "could not write the app path into the login item"
+  chmod 644 "$PLIST"
   plutil -lint "$PLIST" >/dev/null || die "the generated login item is not valid plist"
   say "Will start when you log in."
 else

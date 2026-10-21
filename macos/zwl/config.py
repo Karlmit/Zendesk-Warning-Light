@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field, asdict, fields
 from datetime import datetime, timezone
 from typing import Any
@@ -27,6 +28,22 @@ VALID_CORNERS = (
     "top-left", "top-right", "bottom-left", "bottom-right",
 )
 DEFAULT_CORNER = "bottom-right"
+
+# One DNS label. The subdomain is pasted into https://<it>.zendesk.com, so a dot,
+# slash, '#', '@' or ':' could otherwise move the host away from zendesk.com.
+_SUBDOMAIN_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+
+
+def normalise_subdomain(value: Any) -> str:
+    """The bare subdomain from what someone typed, or "" when it is not valid."""
+    text = str(value or "").strip().lower()
+    for prefix in ("https://", "http://"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    text = text.rstrip("/")
+    if text.endswith(".zendesk.com"):
+        text = text[:-len(".zendesk.com")]
+    return text if _SUBDOMAIN_RE.fullmatch(text) else ""
 
 
 @dataclass
@@ -72,7 +89,8 @@ class Config:
 
     @property
     def base_url(self) -> str:
-        return "https://{}.zendesk.com".format(self.subdomain.strip())
+        # An invalid subdomain gives an address zwl.auth refuses to send tokens to.
+        return "https://{}.zendesk.com".format(normalise_subdomain(self.subdomain))
 
     def animation_path(self) -> str:
         """Resolve :attr:`animation` to a concrete file path."""
@@ -208,6 +226,11 @@ class Config:
             log.info("migrating v1 OAuth client %r -> %r", cfg.client_id, CLIENT_ID)
             cfg.client_id = CLIENT_ID
 
+        subdomain = normalise_subdomain(cfg.subdomain)
+        if cfg.subdomain and not subdomain:
+            log.warning("ignoring invalid Zendesk subdomain %r", cfg.subdomain)
+        cfg.subdomain = subdomain
+
         cfg.poll_seconds = max(10, int(cfg.poll_seconds))
         cfg.animation_height = max(80, min(900, int(cfg.animation_height)))
         cfg.opacity = max(0.2, min(1.0, float(cfg.opacity)))
@@ -275,7 +298,13 @@ def load() -> Config:
         log.exception("could not read %s - falling back to defaults", path)
         return Config()
 
-    cfg = Config.from_dict(raw)
+    try:
+        cfg = Config.from_dict(raw)
+    except Exception:
+        # Wrong types (a string poll interval, a list where a dict belongs...) must
+        # not stop the app from starting.
+        log.exception("invalid settings in %s - falling back to defaults", path)
+        return Config()
 
     # Rewrite the file once when it is out of step with this version, so retired v1
     # keys do not linger and newly added settings are visible and hand-editable

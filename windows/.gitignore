@@ -4,6 +4,8 @@ dist/
 *.spec
 __pycache__/
 *.pyc
+*.log
+*.intunewin
 
 # OneDrive / editor noise
 Thumbs.db

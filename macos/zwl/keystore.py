@@ -100,7 +100,11 @@ def encrypt(plaintext: str) -> str:
 
     if _store(plaintext):
         return MARKER
-    return "plain:" + base64.b64encode(plaintext.encode("utf-8")).decode("ascii")
+    # The Keychain is there but refused (locked, denied...). Do not quietly drop the
+    # token into tokens.json instead: keep it in memory only, so this session works
+    # and the next start asks for a fresh sign-in.
+    log.warning("refresh token not persisted; you will need to sign in again next start")
+    return ""
 
 
 def decrypt(stored: str) -> str:

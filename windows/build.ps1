@@ -29,7 +29,8 @@ if (-not (Test-Path $python)) {
 
 Write-Host 'Installing dependencies...' -ForegroundColor Cyan
 & $python -m pip install --quiet --upgrade pip
-& $python -m pip install --quiet -r requirements.txt pyinstaller
+# Bounded: 6.x carries the onefile temp-dir and bootloader sys.path fixes.
+& $python -m pip install --quiet -r requirements.txt 'pyinstaller>=6.10,<7'
 
 Write-Host 'Generating application icon...' -ForegroundColor Cyan
 $env:QT_QPA_PLATFORM = 'offscreen'

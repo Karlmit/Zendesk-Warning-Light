@@ -30,6 +30,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -61,6 +62,12 @@ TOKEN_PATH = "/oauth/tokens"
 SIGN_IN_TIMEOUT = 240          # Zendesk's code is valid 120s; allow time for SSO
 REFRESH_MARGIN = 120           # refresh this long before the access token expires
 REQUEST_TIMEOUT = 30
+CALLBACK_READ_TIMEOUT = 10     # a silent connection must not wedge the listener
+
+# The only hosts a token may ever be sent to. The subdomain is typed by the user,
+# so without this "evil.com#" or "x.evil.com/" would build a URL whose real host is
+# not zendesk.com, and the authorization code / refresh token would go there.
+_BASE_URL_RE = re.compile(r"https://[a-z0-9][a-z0-9-]{0,62}\.zendesk\.com")
 
 
 class AuthError(RuntimeError):
@@ -69,6 +76,27 @@ class AuthError(RuntimeError):
 
 class AuthExpired(AuthError):
     """No usable token and no way to get one without the user signing in again."""
+
+
+def check_base_url(base_url: str) -> str:
+    """Return ``base_url`` normalised, or raise if it is not https://<sub>.zendesk.com."""
+    base = (base_url or "").strip().rstrip("/").lower()
+    if not _BASE_URL_RE.fullmatch(base):
+        raise AuthError(
+            "{!r} is not a Zendesk address. Enter just your subdomain, the part "
+            "before .zendesk.com.".format(base_url))
+    return base
+
+
+def _write_private(path, text: str) -> None:
+    """Write ``text`` to ``path`` readable by the current user only."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    try:
+        os.chmod(str(path), 0o600)      # in case it already existed, wider
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------- #
@@ -196,7 +224,7 @@ class TokenStore:
             }
         try:
             tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            _write_private(tmp, json.dumps(payload, indent=2))
             tmp.replace(path)
         except Exception:
             log.exception("could not write %s", path)
@@ -251,6 +279,10 @@ class TokenStore:
 
     def access_token(self, force_refresh: bool = False) -> str:
         with self._lock:
+            if not self._refresh_token and not self._access_token:
+                raise AuthExpired("You need to sign in to Zendesk.")
+            # Callers send the token to base_url, so never hand it out for a bad one.
+            check_base_url(self.base_url)
             fresh_enough = (
                 self._access_token
                 and time.time() < self._expires_at - REFRESH_MARGIN
@@ -265,15 +297,17 @@ class TokenStore:
     def _refresh_locked(self, allow_reload: bool = True) -> None:
         log.info("refreshing the Zendesk access token")
         attempted = self._refresh_token
+        token_url = check_base_url(self.base_url) + TOKEN_PATH
         try:
             resp = requests.post(
-                self.base_url.rstrip("/") + TOKEN_PATH,
+                token_url,
                 json={
                     "grant_type": "refresh_token",
                     "client_id": self.client_id,
                     "refresh_token": attempted,
                 },
                 timeout=REQUEST_TIMEOUT,
+                allow_redirects=False,      # a 307/308 would re-send the token body
             )
         except requests.RequestException as exc:
             # Network trouble is not an expired sign-in - keep the refresh token.
@@ -307,11 +341,11 @@ class TokenStore:
 
     def sign_in(self, base_url: str, client_id: str = CLIENT_ID) -> SignedInUser:
         """Run the browser flow. Blocking - call from a worker thread."""
-        base = base_url.rstrip("/")
+        base = check_base_url(base_url)
         verifier, challenge = make_pkce()
         state = secrets.token_urlsafe(24)
 
-        server, port = _start_listener()
+        server, port = _start_listener(state)
         redirect_uri = "http://{}:{}{}".format(CALLBACK_HOST, port, CALLBACK_PATH)
         try:
             params = {
@@ -333,7 +367,9 @@ class TokenStore:
             result = dict(_Callback.result)
         finally:
             server.shutdown()
+            server.server_close()
             _Callback.result = {}
+            _Callback.expected_state = ""
 
         if not result:
             raise AuthError(
@@ -380,6 +416,7 @@ class TokenStore:
                     "scope": SCOPE,
                 },
                 timeout=REQUEST_TIMEOUT,
+                allow_redirects=False,      # a 307/308 would re-send the code + verifier
             )
         except requests.RequestException as exc:
             raise AuthError("Could not reach {}: {}".format(base, exc)) from exc
@@ -422,15 +459,24 @@ _PAGE = (
 
 class _Callback(http.server.BaseHTTPRequestHandler):
     result: dict[str, str] = {}
+    expected_state: str = ""
+    timeout = CALLBACK_READ_TIMEOUT    # socket timeout per connection
 
     def do_GET(self) -> None:          # noqa: N802 - name fixed by the framework
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path != CALLBACK_PATH:
             self.send_error(404)
             return
-        _Callback.result = {
-            k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()
-        }
+        query = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()}
+        # Only the redirect carrying our own state may end the wait. Anything else -
+        # a stray tab, or a web page poking 127.0.0.1 - is refused and ignored, so it
+        # can neither abort the sign-in nor put its own message in front of the user.
+        expected = _Callback.expected_state
+        if (_Callback.result or not expected or not secrets.compare_digest(
+                query.get("state", "").encode("utf-8"), expected.encode("utf-8"))):
+            self.send_error(400)
+            return
+        _Callback.result = query
         ok = "code" in _Callback.result
         page = _PAGE.format(
             colour="#ffb020" if ok else "#e0533d",
@@ -449,12 +495,19 @@ class _Callback(http.server.BaseHTTPRequestHandler):
         pass                            # never write to stdout in a windowed app
 
 
-def _start_listener() -> tuple[http.server.HTTPServer, int]:
+class _LoopbackServer(http.server.HTTPServer):
+    # On Windows SO_REUSEADDR lets a second socket bind a port that is already in
+    # use, so another local process could share (and race us for) the callback.
+    allow_reuse_address = os.name != "nt"
+
+
+def _start_listener(state: str) -> tuple[http.server.HTTPServer, int]:
     _Callback.result = {}
+    _Callback.expected_state = state
     last: OSError | None = None
     for port in CALLBACK_PORTS:
         try:
-            server = http.server.HTTPServer((CALLBACK_HOST, port), _Callback)
+            server = _LoopbackServer((CALLBACK_HOST, port), _Callback)
         except OSError as exc:
             last = exc
             log.info("callback port %d busy, trying the next", port)
