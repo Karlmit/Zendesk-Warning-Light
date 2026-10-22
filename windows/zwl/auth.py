@@ -171,10 +171,10 @@ def describe_bad_reply(resp: requests.Response) -> str:
 
 
 # The error codes RFC 6749 section 5.2 defines. Only these names are ever logged.
-_OAUTH_ERRORS = {name: name for name in (
+_OAUTH_ERRORS = (
     "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
     "unsupported_grant_type", "invalid_scope",
-)}
+)
 
 
 def _oauth_error(resp: requests.Response) -> str:
@@ -187,8 +187,11 @@ def _oauth_error(resp: requests.Response) -> str:
         error = resp.json().get("error")
     except (ValueError, AttributeError):
         return "(no error code)"
-    return _OAUTH_ERRORS.get(error, "(other error code)") if isinstance(error, str) \
-        else "(no error code)"
+    # Return our own copy of the name, not the reply's string.
+    for name in _OAUTH_ERRORS:
+        if error == name:
+            return name
+    return "(other error code)" if error else "(no error code)"
 
 
 def json_body(resp: requests.Response) -> Any:
