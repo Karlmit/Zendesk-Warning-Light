@@ -13,7 +13,7 @@
 | Medium | 7 | 6 | 1 |
 | Low | 22 | 22 | 0 (L19 has an accepted residual part) |
 | Info | 15 | 9 | 6 |
-| Tool scans (S1–S4) | 4 | 4 | 0 |
+| Tool scans and fuzzing (S1–S5) | 5 | 5 | 0 |
 
 Nothing was found that a remote attacker could exploit on its own. The most important fixes:
 
@@ -55,7 +55,9 @@ Automated scanners, run on top of the manual review. Every tool was downloaded f
 | Semgrep 1.182.1 (`p/python`, `p/security-audit`, `p/secrets`, `p/command-injection`) | Broader security rules, 69 files | 4 results. Triage below |
 | ShellCheck | All shell scripts | Clean |
 | PSScriptAnalyzer | All three `.ps1` scripts | No errors; style warnings only (`Write-Host`, `ShouldProcess`) |
-| OpenSSF Scorecard 5.6.0 | Repository security practices | Baseline **2.1 / 10**. See S-items below |
+| OpenSSF Scorecard 5.6.0 | Repository security practices | **2.1 → 5.8 / 10** after this work. See Scorecard below |
+| atheris 3.1.0 (coverage-guided fuzzer) | The token host checks (M1, M2, M7) with random input | **Found S5** within seconds; after the fix, 6.4 million inputs in 5 minutes with no failures |
+| actionlint 1.7.12, zizmor 1.31.1 | The new GitHub workflows | No findings |
 
 **Bandit triage (36 low):**
 - **Fixed (S1):** `explorer` started by bare name in `windows/zwl/settings_ui.py` (B607); it is looked up in the current directory first. Now the full path from `GetSystemWindowsDirectoryW`.
@@ -73,6 +75,15 @@ Automated scanners, run on top of the manual review. Every tool was downloaded f
 - **Fixed (S1, second rule):** `dangerous-subprocess-use-tainted-env-args` on the first version of the S1 fix, which built the path from `%SystemRoot%`. The environment can change that, so the fix asks Windows for the directory instead.
 - **False positive:** `insecure-file-permissions` on `os.chmod(path, 0o700)` in `macos/zwl/paths.py`. 0700 is owner-only (this is the L5 fix); the rule flags any mode that includes the execute bit, which a directory needs.
 
+**Fuzzing (S5):** `fuzz/fuzz_token_hosts.py` feeds random text to the three checks that decide where a token may go, and asserts these invariants:
+- `normalise_subdomain` returns nothing or a single DNS label.
+- `check_base_url` only accepts `https://<label>.zendesk.com`.
+- `_url` either refuses, or produces a URL that `requests` really sends to `acme.zendesk.com` over https with no userinfo or port.
+
+The last invariant reads the host with urllib3's parser, the one used on the wire, rather than the `urlsplit` that `_url` checks with, so any disagreement between the two parsers counts as a failure.
+- **Fixed (S5, Low):** within seconds the fuzzer found that a malformed host such as `//[JJ` or `https://[::1/x` made `_url()` raise a bare `ValueError` instead of `ZendeskError`. A tampered `next_page` could use this to break callers that fall back on `ZendeskError`, such as the incremental-export to ticket-sweep fallback in `sources.py` and the groups list in Settings; the poll itself survives through the monitor's catch-all. `_url()` now turns it into `ZendeskError`, and both values are in `test_security.py`.
+- The fuzzer runs for 2 minutes on every push in CI (`tests.yml`, job `fuzz`), with hash-pinned dependencies in `fuzz/requirements.txt`.
+
 **Hash-pinned lock files (closes the open lock-file item):**
 - New `{windows,macos}/requirements-build.in` list the version ranges, including PyInstaller. They are compiled with `uv pip compile --generate-hashes` into `requirements-build.txt`; the exact command is at the top of each lock.
 - The Windows lock targets Windows x64 / Python 3.12. The macOS lock is universal for Python 3.10 and later, so it works on both Intel and Apple silicon.
@@ -85,9 +96,9 @@ Automated scanners, run on top of the manual review. Every tool was downloaded f
 
 The checks that were run once by hand during the review are now permanent test scripts, so a later change that reopens a hole fails the build:
 
-- **`{windows,macos}/tests/test_security.py`** (72 checks): each check names the finding it guards and tries the actual attack:
+- **`{windows,macos}/tests/test_security.py`** (74 checks): each check names the finding it guards and tries the actual attack:
   - **M1:** 10 hostile subdomains are rejected, and `check_base_url`, `sign_in` and `access_token` refuse non-Zendesk addresses.
-  - **M2/M7:** two real local HTTP servers, one playing Zendesk and one an attacker. A `next_page` pointing at the attacker (absolute, `@host` and `//host` forms) is refused, and the attacker server receives no request at all. `_url` refuses 9 crafted values.
+  - **M2/M7:** two real local HTTP servers, one playing Zendesk and one an attacker. A `next_page` pointing at the attacker (absolute, `@host` and `//host` forms) is refused, and the attacker server receives no request at all. `_url` refuses 11 crafted values, including the two S5 inputs.
   - **L1:** the real loopback listener refuses a wrong `state`, a bare `error=`, and a second redirect after the first.
   - **L5:** `tokens.json` is 0600 (macOS/Linux).
   - **L6:** the refresh and the code exchange don't follow redirects.
@@ -100,7 +111,7 @@ The checks that were run once by hand during the review are now permanent test s
 **The tests were checked against old code, to confirm they catch the holes:**
 - On the commit before the second pass (`403df7a`), exactly the 19 checks for M7, I15, S4 and L22 fail. On that code, the attacker server really did receive the bearer token.
 - On the commit before the first review (`bcaa05a`), the script stops with an error at the first check, because the subdomain validation did not exist yet. That still counts as a failed run.
-- On the current code, all 72 checks pass on Linux. CI runs them on real Windows and macOS (below).
+- On the current code, all 74 checks pass on Linux. CI runs them on real Windows and macOS (below).
 
 ## Continuous checks on GitHub (2026-10-22)
 
@@ -109,6 +120,7 @@ New files in `.github/`:
 | Workflow / setting | What it does |
 |---|---|
 | `workflows/tests.yml` | On every push and PR, on real `windows-latest` and `macos-latest` runners: installs the hash-pinned dependencies and runs every test script, including the security tests. Then it checks the installers on those runners: <br>• **Windows:** builds with `build.ps1 -Installer` (PySide6 6.12, the version Wine could not run) and runs a per-user silent install and uninstall. It then runs **`Intune-Install.cmd` as SYSTEM through a scheduled task**, the way Intune does, and checks for a machine-wide install in Program Files with the HKLM Run value, with **no copy of the app running as SYSTEM (M3)**. Last, it uninstalls with `Intune-Uninstall.cmd` as SYSTEM. <br>• **macOS:** builds the `.app` with `build.sh` and checks its signature and `Info.plist`. |
+| `workflows/tests.yml`, other jobs | `shared code is identical` fails the build if the files copied between `windows/` and `macos/` (including `config.py`, `zendesk.py`, `monitor.py` and `test_security.py`) drift apart, so a fix can't land on only one platform. `fuzz` runs the fuzzer above for 2 minutes |
 | `workflows/codeql.yml` | CodeQL static analysis (`security-extended` queries) of the Python code and of the workflows themselves, on every push, every PR and weekly |
 | `workflows/scorecard.yml` | OpenSSF Scorecard on every push and weekly; results go to Security > Code scanning |
 | `dependabot.yml` | Weekly update PRs for both `requirements-build.txt` locks and for the pinned Actions |

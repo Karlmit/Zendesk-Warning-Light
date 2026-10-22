@@ -57,7 +57,10 @@ class ZendeskClient:
             url = self.base_url + path
         else:
             url = path
-        base, target = urlsplit(self.base_url), urlsplit(url)
+        try:
+            base, target = urlsplit(self.base_url), urlsplit(url)
+        except ValueError as exc:       # e.g. an unclosed "[" IPv6 host
+            raise ZendeskError("Refusing a malformed address: {}".format(exc)) from exc
         if (target.scheme, target.netloc.lower()) != (base.scheme, base.netloc.lower()):
             raise ZendeskError("Refusing to send the sign-in token to {}://{}".format(
                 target.scheme, target.netloc))

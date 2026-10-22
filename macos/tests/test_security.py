@@ -132,7 +132,8 @@ evil.shutdown()
 client = ZendeskClient(FakeTokens("https://acme.zendesk.com"))
 for path in ("@evil.com/x", ".evil.com/x", ":443@evil.com/x", "//evil.com/x",
              "HTTPS://evil.com/x", "https://evil.com/", "http://acme.zendesk.com/x",
-             "https://u@acme.zendesk.com/x", "api/v2"):
+             "https://u@acme.zendesk.com/x", "api/v2",
+             "//[JJ", "https://[::1/x"):                         # S5: malformed hosts
     check("M7 _url refuses {!r}".format(path), raises(lambda: client._url(path), ZendeskError), True)
 check("M7 a normal path still works", client._url("/api/v2/groups.json"),
       "https://acme.zendesk.com/api/v2/groups.json")

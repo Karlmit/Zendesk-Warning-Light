@@ -20,6 +20,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  shared-code:
+    name: shared code is identical
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Security fixes must land on both platforms
+        # These files are copies; a fix applied to only one would leave the other
+        # platform exposed. auth, keystore, paths, sound, autostart, settings_ui and
+        # changelog legitimately differ.
+        run: |
+          failed=0
+          for f in zwl/app.py zwl/config.py zwl/icons.py zwl/modes.py zwl/monitor.py \
+                   zwl/overlay.py zwl/sources.py zwl/zendesk.py tests/test_security.py; do
+            if cmp -s "windows/$f" "macos/$f"; then echo "same: $f"
+            else echo "::error file=macos/$f::differs from windows/$f"; failed=1; fi
+          done
+          exit $failed
+
+  fuzz:
+    name: fuzz token host checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned fuzzing dependencies (hash-checked)
+        run: python -m pip install --require-hashes -r fuzz/requirements.txt
+      - name: Fuzz for 2 minutes
+        run: |
+          mkdir -p "$RUNNER_TEMP/corpus" "$RUNNER_TEMP/crashes"
+          python fuzz/fuzz_token_hosts.py -max_total_time=120 -print_final_stats=1 \
+            -artifact_prefix="$RUNNER_TEMP/crashes/" "$RUNNER_TEMP/corpus"
+      - name: Keep any crashing input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashes
+          path: ${{ runner.temp }}/crashes/
+          retention-days: 14
+
   test:
     name: tests (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
@@ -79,12 +124,16 @@ jobs:
         run: |
           $setup = (Resolve-Path dist\ZendeskWarningLight-Setup-*.exe).Path
           $dir = "$env:LOCALAPPDATA\Programs\ZendeskWarningLight"
-          $p = Start-Process $setup -ArgumentList '/S', "/LOG=$env:RUNNER_TEMP\user.log" -Wait -PassThru
+          # Not -Wait: that waits for the whole process tree, and the installer
+          # leaves the app it started running.
+          $p = Start-Process $setup -ArgumentList '/S', "/LOG=$env:RUNNER_TEMP\user.log" -PassThru
+          if (-not $p.WaitForExit(300000)) { throw 'install timed out' }
           if ($p.ExitCode -ne 0) { throw "install exit code $($p.ExitCode)" }
           if (-not (Test-Path "$dir\ZendeskWarningLight.exe")) { throw 'not installed per user' }
           $run = Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' ZendeskWarningLight
           if ($run -ne "`"$dir\ZendeskWarningLight.exe`"") { throw "unexpected Run value: $run" }
-          $p = Start-Process $setup -ArgumentList '/S', '/uninstall' -Wait -PassThru
+          $p = Start-Process $setup -ArgumentList '/S', '/uninstall' -PassThru
+          if (-not $p.WaitForExit(300000)) { throw 'uninstall timed out' }
           if ($p.ExitCode -ne 0) { throw "uninstall exit code $($p.ExitCode)" }
           if (Test-Path $dir) { throw 'install folder left behind' }
           Write-Output 'per-user install and uninstall OK'

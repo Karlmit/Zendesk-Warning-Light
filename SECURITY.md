@@ -4,7 +4,7 @@
 
 Please report security problems privately, not in a public issue:
 
-- **GitHub:** open the repository's **Security** tab and choose **Report a vulnerability**. Only the maintainer sees it.
+- **GitHub:** use [Report a vulnerability](https://github.com/Karlmit/Zendesk-Warning-Light/security/advisories/new), also on the repository's **Security** tab. Only the maintainer sees it.
 - Include what you found, how to reproduce it, and which version or commit you tested.
 
 You will get a reply within 5 working days. Fixes are released as soon as they are ready, and the reporter is credited unless they ask not to be.
