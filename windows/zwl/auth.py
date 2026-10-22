@@ -170,13 +170,25 @@ def describe_bad_reply(resp: requests.Response) -> str:
         resp.headers.get("Content-Type", "unknown"), snippet)
 
 
+# The error codes RFC 6749 section 5.2 defines. Only these names are ever logged.
+_OAUTH_ERRORS = {name: name for name in (
+    "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
+    "unsupported_grant_type", "invalid_scope",
+)}
+
+
 def _oauth_error(resp: requests.Response) -> str:
-    """The ``error`` code of an OAuth error reply, such as "invalid_grant"."""
+    """The OAuth ``error`` code of a reply, such as "invalid_grant".
+
+    Returns one of the fixed names above, never text from the reply, so nothing
+    Zendesk sends can end up in the log file.
+    """
     try:
         error = resp.json().get("error")
     except (ValueError, AttributeError):
         return "(no error code)"
-    return str(error)[:64] if error else "(no error code)"
+    return _OAUTH_ERRORS.get(error, "(other error code)") if isinstance(error, str) \
+        else "(no error code)"
 
 
 def json_body(resp: requests.Response) -> Any:

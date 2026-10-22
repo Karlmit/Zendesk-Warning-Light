@@ -225,6 +225,8 @@ auth.log.removeHandler(handler)
 logged = " ".join(r.getMessage() for r in records)
 check("S4 the log names the OAuth error", "invalid_grant" in logged, True)
 check("S4 the log does not copy the reply body", "leak-me-not" in logged, False)
+check("S4 an unknown error code is not logged either",
+      auth._oauth_error(Reply(400, {"error": "secret-abc"})), "(other error code)")
 
 posts.clear()
 next_reply[0] = Reply(200, {"access_token": "AT", "refresh_token": "RT"})

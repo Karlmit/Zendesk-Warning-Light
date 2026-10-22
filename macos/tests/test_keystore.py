@@ -27,6 +27,7 @@ SECRET = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
 calls = []
 stored = {}
 real_run = subprocess.run
+real_which = keystore.shutil.which    # keystore.shutil is the shutil module itself
 
 
 def fake_run(args, input=None, **kwargs):
@@ -61,10 +62,11 @@ check("a security binary on PATH but not at /usr/bin is not used",
 # --- the real Keychain ------------------------------------------------------ #
 
 keystore.subprocess.run = real_run
-import shutil  # noqa: E402
-keystore.shutil.which = shutil.which
+keystore.shutil.which = real_which
 
-if sys.platform == "darwin" and shutil.which(keystore.SECURITY):
+if sys.platform == "darwin":
+    # On a Mac this must really run, never quietly skip.
+    check("Keychain: /usr/bin/security exists", bool(real_which(keystore.SECURITY)), True)
     keystore.SERVICE = "com.yourcompany.zendeskwarninglight.selftest"
     try:
         check("Keychain: store", keystore.encrypt(SECRET), keystore.MARKER)
