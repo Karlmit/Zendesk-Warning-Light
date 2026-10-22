@@ -183,6 +183,12 @@ class Reply:
     def json(self):
         return self._payload
 
+    def iter_content(self, size):
+        yield self.text.encode()
+
+    def close(self):
+        pass
+
 
 posts = []
 next_reply = [Reply(200, {"access_token": "AT", "expires_in": 1800, "refresh_token": "RT2"})]
@@ -284,6 +290,103 @@ for value, want in (("junk", 10), ("-5", 0), ("99999", 60), ("Wed, 21 Oct 2026 0
     raises(lambda: client.get("/api/v2/x.json"), ZendeskError)
     check("L12 Retry-After {!r} waits {}s".format(value, want), slept[:1], [want])
     srv.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# I8 - a huge or decompression-bomb reply cannot exhaust memory
+# --------------------------------------------------------------------------- #
+
+class Big(http.server.BaseHTTPRequestHandler):
+    """Sends ``size`` bytes, optionally gzip-compressed and without a length."""
+
+    size = 0
+    gzip = False
+
+    def do_GET(self):
+        import gzip as gz
+        body = b"{" + b" " * self.size + b"}"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        if self.gzip:
+            body = gz.compress(body)
+            self.send_header("Content-Encoding", "gzip")
+        else:
+            self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
+class Quiet(http.server.HTTPServer):
+    def handle_error(self, request, client_address):
+        pass                # the client hanging up mid-reply is the point
+
+
+for size, compressed, ok in ((1000, False, True), (zendesk.MAX_REPLY_BYTES + 10, False, False),
+                             (zendesk.MAX_REPLY_BYTES + 10, True, False)):
+    handler_cls = type("B", (Big,), {"size": size, "gzip": compressed})
+    srv = Quiet(("127.0.0.1", 0), handler_cls)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    client = ZendeskClient(FakeTokens("http://127.0.0.1:{}".format(srv.server_port)))
+    label = "{} MB{}".format(size // (1024 * 1024), " gzip bomb" if compressed else "")
+    if ok:
+        check("I8 a normal reply still parses", client.get("/api/v2/x.json"), {})
+    else:
+        check("I8 a {} reply is refused".format(label),
+              raises(lambda: client.get("/api/v2/x.json"), ZendeskError), True)
+    srv.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# I7 - the default log holds no customer text or agent identity
+# --------------------------------------------------------------------------- #
+
+user = auth.SignedInUser(id=42, name="Ada Agent", email="ada@example.com", role="agent")
+check("I7 the log label has no name", "Ada" in user.log_label(), False)
+check("I7 the log label has no email", "@" in user.log_label(), False)
+check("I7 the log label keeps the id and role", user.log_label(), "user 42 (agent)")
+source = (Path(__file__).resolve().parent.parent / "zwl")
+for module in ("auth.py", "settings_ui.py", "monitor.py"):
+    text = (source / module).read_text(encoding="utf-8")
+    check("I7 {} never logs describe()".format(module),
+          any("log." in line and "describe()" in line for line in text.splitlines()), False)
+check("I7 ticket subjects are logged at debug level only",
+      [line.strip() for line in (source / "monitor.py").read_text(encoding="utf-8").splitlines()
+       if line.strip().startswith("log.") and "subject" in line
+       and not line.strip().startswith("log.debug")], [])
+
+
+# --------------------------------------------------------------------------- #
+# S6 - the "already running" check is per user, not per machine
+# --------------------------------------------------------------------------- #
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from zwl import app as app_module   # noqa: E402
+
+real_getuser, real_getuid = app_module.getpass.getuser, getattr(app_module.os, "getuid", None)
+
+
+def key_for(name, uid):
+    app_module.getpass.getuser = lambda: name
+    app_module.os.getuid = lambda: uid
+    try:
+        return app_module.instance_key()
+    finally:
+        app_module.getpass.getuser = real_getuser
+        if real_getuid is None:
+            del app_module.os.getuid
+        else:
+            app_module.os.getuid = real_getuid
+
+
+check("S6 two users get different instance keys", key_for("ada", 501) != key_for("bob", 502), True)
+check("S6 the same user always gets the same key", key_for("ada", 501), key_for("ada", 501))
+check("S6 the key does not reveal the user name", "ada" in key_for("ada", 501), False)
+app_source = (source / "app.py").read_text(encoding="utf-8")
+check("S6 the server only lets this user connect", "UserAccessOption" in app_source, True)
+check("S6 no fixed machine-wide name is left", "SINGLE_INSTANCE_KEY" in app_source, False)
 
 
 failed = [c for c in CHECKS if not c[1]]

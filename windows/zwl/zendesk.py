@@ -15,12 +15,14 @@ from urllib.parse import urlsplit
 
 import requests
 
-from .auth import AuthError, TokenStore, describe_bad_reply
+from .auth import AuthError, ReplyTooLarge, TokenStore, describe_bad_reply, read_limited
 
 log = logging.getLogger(__name__)
 
 USER_AGENT = "ZendeskWarningLight/2.0"
 MAX_GROUP_PAGES = 10
+# 100 tickets with long descriptions are a few MB; anything this big is not Zendesk.
+MAX_REPLY_BYTES = 32 * 1024 * 1024
 
 
 class ZendeskError(RuntimeError):
@@ -77,9 +79,10 @@ class ZendeskClient:
         try:
             resp = self._session.get(
                 url, headers={"Authorization": "Bearer " + token},
-                params=params, timeout=self.timeout,
+                params=params, timeout=self.timeout, stream=True,
             )
-        except requests.RequestException as exc:
+            read_limited(resp, MAX_REPLY_BYTES)
+        except (requests.RequestException, ReplyTooLarge) as exc:
             raise ZendeskError("Request to {} failed: {}".format(path, exc)) from exc
 
         if resp.status_code == 401 and _retry:
@@ -114,10 +117,12 @@ class ZendeskClient:
         url = self._url(path)
         token = self._tokens.access_token()
         try:
+            # Only the status matters, so the body is never read.
             resp = self._session.get(
                 url, headers={"Authorization": "Bearer " + token},
-                params=params, timeout=self.timeout,
+                params=params, timeout=self.timeout, stream=True,
             )
+            resp.close()
         except requests.RequestException as exc:
             raise ZendeskError("Request to {} failed: {}".format(path, exc)) from exc
         return resp.status_code

@@ -424,7 +424,9 @@ class Monitor(QObject):
             created_at=snapshot.get("created_at") or "",
         )
         self._alerts[ticket_id] = alert
-        log.info("ALERT %s: #%s %s", reason, ticket_id, alert.subject[:70])
+        # The subject is customer text, so it only goes in a --verbose log.
+        log.info("ALERT %s: #%s", reason, ticket_id)
+        log.debug("ALERT #%s subject: %s", ticket_id, alert.subject[:70])
 
     def _drop_alert_if_resolved(self, ticket_id: int, snapshot: dict[str, Any]) -> None:
         alert = self._alerts.get(ticket_id)

@@ -4,16 +4,22 @@
 **Scope:** Whole repository: `windows/` and `macos/` app code (`zwl/*`), tools, build and install scripts, installers (Inno Setup, Intune, PowerShell, shell), dependency manifests, and full git history.
 **Method:** Manual review, split across four parallel reviewers (auth/secrets, app/API/UI, macOS packaging, Windows packaging), then cross-checked and merged. A second pass on the same day re-read the app code, installers and the first pass's fixes, and added M7, L22 and I15. A follow-up fixed every open item that could be fixed and checked here: L20, L21, I11, I12 and I15. On 2026-10-22, automated scanners were added on top (see Tool scans), plus permanent security regression tests, CI on real Windows and macOS machines, and hash-pinned dependencies; L19 and the lock-file item were closed.
 
+## Context and focus (decided 2026-10-22)
+
+This is an internal app for a small team. The macOS install command (`install/install-macos.sh`) is run by one employee, and the Windows app is installed by hand or through Intune. **Hardening therefore focuses on the installed app**: what runs on people's machines, the data it holds and logs, and what it talks to.
+
+Given that context, the owner **accepted** the repository-process items: M5 (the installer builds from `main`) and Scorecard's Branch-Protection, Code-Review, Signed-Releases/Packaging, License and CII-Best-Practices. They add process without reducing real risk for a team this size. **Code signing (I9) is also accepted**, because no signing certificate is available. Everything that protects the installed build stays in place: the security tests, CI on real Windows and macOS, hash-pinned dependencies and Dependabot.
+
 ## Summary
 
 | Severity | Found | Fixed | Open (recommendation only) |
 |---|---|---|---|
 | Critical | 0 | 0 | 0 |
 | High | 0 | 0 | 0 |
-| Medium | 7 | 6 | 1 |
+| Medium | 7 | 6 | 1 accepted (M5) |
 | Low | 22 | 22 | 0 (L19 has an accepted residual part) |
-| Info | 15 | 9 | 6 |
-| Tool scans and fuzzing (S1–S5) | 5 | 5 | 0 |
+| Info | 15 | 11 | 4 accepted (I9, I10, I13, I14) |
+| Tool scans, fuzzing and app review (S1–S6) | 6 | 6 | 0 |
 
 Nothing was found that a remote attacker could exploit on its own. The most important fixes:
 
@@ -103,7 +109,7 @@ The last invariant reads the host with urllib3's parser, the one used on the wir
 
 The checks that were run once by hand during the review are now permanent test scripts, so a later change that reopens a hole fails the build:
 
-- **`{windows,macos}/tests/test_security.py`** (74 checks): each check names the finding it guards and tries the actual attack:
+- **`{windows,macos}/tests/test_security.py`** (89 checks): each check names the finding it guards and tries the actual attack:
   - **M1:** 10 hostile subdomains are rejected, and `check_base_url`, `sign_in` and `access_token` refuse non-Zendesk addresses.
   - **M2/M7:** two real local HTTP servers, one playing Zendesk and one an attacker. A `next_page` pointing at the attacker (absolute, `@host` and `//host` forms) is refused, and the attacker server receives no request at all. `_url` refuses 11 crafted values, including the two S5 inputs.
   - **L1:** the real loopback listener refuses a wrong `state`, a bare `error=`, and a second redirect after the first.
@@ -113,7 +119,10 @@ The checks that were run once by hand during the review are now permanent test s
   - **S4:** a rejected refresh logs the HTTP status and nothing from the reply.
   - **L8, L10, L22:** bad config types, path-like sound names and UNC animation paths are neutralised.
   - **L12:** hostile `Retry-After` values (junk, negative, huge, HTTP-date) give bounded waits.
-- **`macos/tests/test_keystore.py`** (10 checks, plus 5 on a real Mac): L19 and S3, described in the L19 row.
+  - **I8:** a real local server sends a normal reply (parsed), a reply over 32 MB with `Content-Length` (refused) and a 32 MB gzip bomb with no length (refused while it decompresses).
+  - **I7:** the log label for the signed-in user has no name or email; no module logs `describe()`; ticket subjects are only logged at debug level.
+  - **S6:** different users get different "already running" keys, the key doesn't contain the user name, and the server is restricted to the current user.
+- **`macos/tests/test_keystore.py`** (10 checks, plus 6 on a real Mac): L19 and S3, described in the L19 row.
 
 **The tests were checked against old code, to confirm they catch the holes:**
 - On the commit before the second pass (`403df7a`), exactly the 19 checks for M7, I15, S4 and L22 fail. On that code, the attacker server really did receive the bearer token.
@@ -164,10 +173,10 @@ The score went from **2.1 to 6.7 / 10**. Every check that code or settings could
 
 | Check | Score | What it would take | Status |
 |---|---|---|---|
-| Branch-Protection, Code-Review | 0 | Protect `main` so that changes go through a reviewed pull request with the CI checks passing | **Owner decision.** It would end direct pushes to `main`, which is how this project works today. Even with only one maintainer, requiring a PR with green checks (no approval) would stop a broken or malicious push before it reaches the `curl \| bash` installer (M5) |
-| License | 0 | Add a `LICENSE` file | **Owner decision.** A licence is a legal choice I shouldn't make; without one, others have no right to reuse the code |
-| Signed-Releases, Packaging | n/a | Publish tagged GitHub releases, ideally built by CI with signed artifacts or provenance | **Owner decision.** Tied to M5 (installs follow `main`) |
-| CII-Best-Practices | 0 | Fill in the OpenSSF Best Practices questionnaire at bestpractices.dev | Owner, about an hour of form-filling |
+| Branch-Protection, Code-Review | 0 | Protect `main` so that changes go through a reviewed pull request with the CI checks passing | **Accepted** (internal project, small team; see Context). Direct pushes to `main` stay |
+| License | 0 | Add a `LICENSE` file | **Accepted.** Internal code, not shared outside the team |
+| Signed-Releases, Packaging | n/a | Publish tagged GitHub releases, ideally built by CI with signed artifacts or provenance | **Accepted** together with M5 |
+| CII-Best-Practices | 0 | Fill in the OpenSSF Best Practices questionnaire at bestpractices.dev | **Accepted.** Not useful for an internal project |
 | Maintained, Contributors | 0 | Time (the repository is under 90 days old) and outside contributors | Nothing to do |
 | CI-Tests | n/a | Counts PRs that ran CI; none exist because changes go straight to `main` | Follows from Branch-Protection |
 
@@ -206,15 +215,13 @@ The score went from **2.1 to 6.7 / 10**. Every check that code or settings could
   - The documented one-liner (both READMEs and the script header) now starts with `curl --proto '=https' --tlsv1.2 -fsSL`.
 - **Still relevant:** See M5. A checksum or signature check would also protect against a compromised source, not just a compromised network path.
 
-### M5. Installer builds whatever is on `main`, with no pin or checksum — OPEN (owner decision)
+### M5. Installer builds whatever is on `main`, with no pin or checksum — ACCEPTED
 - **File:** `install/install-macos.sh`
 - **Issue:** The installer downloads the `main` branch and builds and runs it. Anyone who can push to `main`, including through a compromised account, reaches every new install and update.
 - **Already in place:** HTTPS only, `curl -f`, `set -euo pipefail`, and a `ZWL_REF` override. The script header now explains how to pin to a tag or commit.
 - **Not changed because:** "always latest" is the advertised way to update, so changing it is the owner's call.
 - **Since 2026-10-22:** every push to `main` now runs the full test suite, including the security tests, and CodeQL in CI, so a bad push is at least caught quickly. CI can't stop a push, though; only branch protection can (see Scorecard).
-- **Recommendation:**
-  - Publish tagged releases and point the README one-liner at a tag.
-  - Optionally publish a SHA-256 of the download and check it in the script.
+- **Accepted (2026-10-22):** one employee runs this installer, for an internal tool, so the risk of a bad push reaching many machines doesn't apply. If that changes, publish tagged releases and point the one-liner at a tag (`ZWL_REF` already supports it).
 
 ### M7. The M2 host check could be bypassed by a value without a scheme — FIXED (second pass)
 - **Files:** `{macos,windows}/zwl/zendesk.py` (`_url`)
@@ -266,9 +273,10 @@ The score went from **2.1 to 6.7 / 10**. Every check that code or settings could
 | I4 | `windows/.gitignore` didn't ignore install logs or Intune packages | **Fixed.** Added `*.log` and `*.intunewin` |
 | I5 | Settings dialog and config had separate subdomain rules (Settings rejected `acme.zendesk.com`) | **Fixed.** Settings uses `config.normalise_subdomain()` |
 | I6 | The README said a silent install starts the app | **Fixed.** Now says it never starts under SYSTEM |
-| I7 | Ticket subjects and the agent's identity are written to the local log | Open. Kept on purpose for troubleshooting. If logs are collected centrally, drop the subject or log it only with `--verbose` |
-| I8 | Responses are read with no size limit | Open. Low risk: page sizes are capped and the host is enforced (M2) |
-| I9 | `xattr -dr com.apple.quarantine` / ad-hoc signing / `codesign --deep` | Open. Recommendation: Developer ID signing and notarization for distributed builds |
+| I7 | Ticket subjects and the agent's identity are written to the local log | **Fixed (2026-10-22).** The default log now has ticket numbers only, and identifies the signed-in user as `user <id> (<role>)` with no name or email (`SignedInUser.log_label()`, used in `auth.py` and `settings_ui.py`). Ticket subjects are logged only at debug level, which is on only with `--verbose`. Logs written before this version still contain the old lines until they rotate out; delete `warning-light.log*` to clear them now. Settings still shows the name and email on screen, which is fine |
+| I8 | Responses are read with no size limit | **Fixed (2026-10-22).** Every request now streams its reply through `auth.read_limited()`, which stops once the reply passes a limit. The limit is counted after decompression, so a gzip bomb is caught. API replies are capped at 32 MB (100 tickets are a few MB); token and profile replies at 64 KB. `probe()` never reads the body. An oversized reply becomes the usual `ZendeskError`/`AuthError`, so the poll carries on |
+| I9 | `xattr -dr com.apple.quarantine` / ad-hoc signing / `codesign --deep`; Windows exe unsigned | **Accepted (2026-10-22):** no signing certificate is available. Without one, a machine can't check that the installed app hasn't been changed since it was built. That's acceptable when the installer is built by the team and passed around internally. Builds come from hash-pinned dependencies, and CI checks the macOS bundle's ad-hoc signature |
+| S6 | **Low, listed here with the other app-review items.** The Windows app's "already running" check used one fixed name (`ZendeskWarningLight.singleton`). On Windows that is a named pipe in a namespace shared by every session, so on a PC several people sign in to (shared desks, fast user switching, Remote Desktop), whoever started first stopped everyone else's copy from starting. Any local program could also hold the name to keep the app from running. Found in the 2026-10-22 app review | **Fixed (2026-10-22).** `app.instance_key()` derives the name from a hash of the user (domain\\user on Windows, uid on macOS), and the server uses `UserAccessOption`, so only that user can connect (pipe ACL on Windows, 0700 socket on macOS). Residual risk: another local user could still create a pipe with this user's predictable name to block their copy, a deliberate denial of service by someone already on the machine. Accepted |
 | I10 | Python is found on the user's PATH, and Homebrew may install Python without asking | Open. Crosses no privilege boundary |
 | I11 | The `--system` error message says "or use sudo" although the script refuses to run as root | **Fixed.** Now says to re-run without `--system` or ask an administrator to make the folder writable (`macos/install.sh`) |
 | I12 | `.cmd` files are stored with LF line endings, which cmd can mishandle around `goto` labels | **Fixed.** New `.gitattributes` with `*.cmd text eol=crlf` and `*.bat text eol=crlf`. Git still stores them with LF, so the diff shows no content change; any checkout, Windows included, gets CRLF. The local copies were converted to match |
@@ -307,6 +315,8 @@ The score went from **2.1 to 6.7 / 10**. Every check that code or settings could
 - **Repository:** `git ls-files` shows no build output, credentials or token files.
 
 ## Changed files
+
+**2026-10-22 (installed-app hardening):** `{windows,macos}/zwl/{app,auth,monitor,settings_ui,zendesk}.py` (I7, I8, S6), `{windows,macos}/tests/test_security.py`.
 
 **2026-10-22 (tools, tests and CI):**
 - **New:** `.github/workflows/{tests,codeql,scorecard}.yml`, `.github/dependabot.yml`, `.github/scripts/run-as-system.ps1`, `SECURITY.md`, `fuzz/{fuzz_token_hosts.py,requirements.in,requirements.txt}`, `{windows,macos}/requirements-build.{in,txt}`, `{windows,macos}/tests/test_security.py`, `macos/tests/test_keystore.py`.

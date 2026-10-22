@@ -63,6 +63,7 @@ SIGN_IN_TIMEOUT = 240          # Zendesk's code is valid 120s; allow time for SS
 REFRESH_MARGIN = 120           # refresh this long before the access token expires
 REQUEST_TIMEOUT = 30
 CALLBACK_READ_TIMEOUT = 10     # a silent connection must not wedge the listener
+MAX_TOKEN_REPLY = 64 * 1024    # token and profile replies are a few hundred bytes
 
 # The only hosts a token may ever be sent to. The subdomain is typed by the user,
 # so without this "evil.com#" or "x.evil.com/" would build a URL whose real host is
@@ -72,6 +73,31 @@ _BASE_URL_RE = re.compile(r"https://[a-z0-9][a-z0-9-]{0,62}\.zendesk\.com")
 
 class AuthError(RuntimeError):
     """Sign-in or refresh failed for a reason the user may be able to fix."""
+
+
+class ReplyTooLarge(ValueError):
+    """A reply went over the size the app is willing to hold in memory."""
+
+
+def read_limited(resp: requests.Response, limit: int) -> None:
+    """Load a ``stream=True`` reply's body, refusing more than ``limit`` bytes.
+
+    Counted after decompression, so a small gzip bomb is caught too. Afterwards
+    ``resp.json()`` and ``resp.text`` work as usual.
+    """
+    declared = resp.headers.get("Content-Length", "")
+    if declared.isdigit() and int(declared) > limit:
+        resp.close()
+        raise ReplyTooLarge("reply of {} bytes is over the {}-byte limit".format(declared, limit))
+    chunks, size = [], 0
+    for chunk in resp.iter_content(64 * 1024):
+        size += len(chunk)
+        if size > limit:
+            resp.close()
+            raise ReplyTooLarge("reply is over the {}-byte limit".format(limit))
+        chunks.append(chunk)
+    resp._content = b"".join(chunks)    # what requests itself sets after reading
+    resp._content_consumed = True
 
 
 class AuthExpired(AuthError):
@@ -151,6 +177,12 @@ class SignedInUser:
             return "not signed in"
         return "{} <{}> ({})".format(self.name, self.email, self.role)
 
+    def log_label(self) -> str:
+        """Who is signed in, for the log: the Zendesk user id and role, no name or email."""
+        if not self.id:
+            return "not signed in"
+        return "user {} ({})".format(self.id, self.role or "unknown role")
+
 
 # ---------------------------------------------------------------------- #
 # token store
@@ -223,7 +255,7 @@ class TokenStore:
             self._access_token = ""
             self._expires_at = 0.0
         if self._refresh_token:
-            log.info("restored Zendesk sign-in for %s", self.user.describe())
+            log.info("restored Zendesk sign-in for %s", self.user.log_label())
 
     def save(self) -> None:
         path = tokens_path()
@@ -336,8 +368,10 @@ class TokenStore:
                 },
                 timeout=REQUEST_TIMEOUT,
                 allow_redirects=False,      # a 307/308 would re-send the token body
+                stream=True,
             )
-        except requests.RequestException as exc:
+            read_limited(resp, MAX_TOKEN_REPLY)
+        except (requests.RequestException, ReplyTooLarge) as exc:
             # Network trouble is not an expired sign-in - keep the refresh token.
             raise AuthError("Could not reach Zendesk to refresh the token: {}".format(exc)) from exc
 
@@ -430,7 +464,7 @@ class TokenStore:
         with self._lock:
             self.user = user
         self.save()
-        log.info("signed in as %s", user.describe())
+        log.info("signed in as %s", user.log_label())
         return user
 
     def _exchange_code(self, base: str, client_id: str, code: str,
@@ -448,8 +482,10 @@ class TokenStore:
                 },
                 timeout=REQUEST_TIMEOUT,
                 allow_redirects=False,      # a 307/308 would re-send the code + verifier
+                stream=True,
             )
-        except requests.RequestException as exc:
+            read_limited(resp, MAX_TOKEN_REPLY)
+        except (requests.RequestException, ReplyTooLarge) as exc:
             raise AuthError("Could not reach {}: {}".format(base, exc)) from exc
 
         if not resp.ok:
@@ -463,11 +499,16 @@ class TokenStore:
 
     @staticmethod
     def _fetch_user(base: str, access_token: str) -> SignedInUser:
-        resp = requests.get(
-            base + "/api/v2/users/me.json",
-            headers={"Authorization": "Bearer " + access_token},
-            timeout=REQUEST_TIMEOUT,
-        )
+        try:
+            resp = requests.get(
+                base + "/api/v2/users/me.json",
+                headers={"Authorization": "Bearer " + access_token},
+                timeout=REQUEST_TIMEOUT,
+                stream=True,
+            )
+            read_limited(resp, MAX_TOKEN_REPLY)
+        except (requests.RequestException, ReplyTooLarge) as exc:
+            raise AuthError("Signed in, but could not read your Zendesk profile: {}".format(exc)) from exc
         if not resp.ok:
             raise AuthError("Signed in, but could not read your Zendesk profile "
                             "({}).".format(resp.status_code))

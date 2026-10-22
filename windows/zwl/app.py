@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import getpass
+import hashlib
 import logging
 import logging.handlers
+import os
 import sys
 import webbrowser
 from datetime import datetime, timedelta, timezone
@@ -22,7 +25,6 @@ from .settings_ui import SettingsDialog
 
 log = logging.getLogger(__name__)
 
-SINGLE_INSTANCE_KEY = "ZendeskWarningLight.singleton"
 PAUSE_TICK_MS = 20_000
 
 PAUSE_CHOICES = [
@@ -501,9 +503,24 @@ class WarningLightApp(QObject):
         self._app.quit()
 
 
-def _already_running() -> bool:
+def instance_key() -> str:
+    """Name of this user's "already running" socket.
+
+    Per user, not per machine: on Windows a local server name is a named pipe in a
+    namespace every session shares, so one fixed name let the first person signed
+    in to a shared PC stop everyone else's copy from starting.
+    """
+    if os.name == "nt":
+        who = "{}\\{}".format(os.environ.get("USERDOMAIN", ""), getpass.getuser())
+    else:
+        who = str(os.getuid())
+    digest = hashlib.sha256(who.lower().encode("utf-8")).hexdigest()[:16]
+    return "ZendeskWarningLight.singleton." + digest
+
+
+def _already_running(key: str) -> bool:
     socket = QLocalSocket()
-    socket.connectToServer(SINGLE_INSTANCE_KEY)
+    socket.connectToServer(key)
     if socket.waitForConnected(300):
         socket.disconnectFromServer()
         return True
@@ -522,7 +539,8 @@ def run(argv: list[str] | None = None) -> int:
     app.setQuitOnLastWindowClosed(False)
     app.setWindowIcon(icons.app_icon())
 
-    if _already_running():
+    key = instance_key()
+    if _already_running(key):
         log.info("another instance is already running - exiting")
         QMessageBox.information(
             None, APP_NAME,
@@ -530,9 +548,11 @@ def run(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    QLocalServer.removeServer(SINGLE_INSTANCE_KEY)
+    QLocalServer.removeServer(key)
     server = QLocalServer()
-    server.listen(SINGLE_INSTANCE_KEY)
+    # Only this user may connect (pipe ACL on Windows, 0700 socket on macOS).
+    server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+    server.listen(key)
 
     if not QSystemTrayIcon.isSystemTrayAvailable():
         QMessageBox.critical(None, APP_NAME, "No system tray is available on this desktop.")

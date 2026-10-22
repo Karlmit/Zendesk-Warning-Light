@@ -1020,7 +1020,7 @@ class SettingsDialog(QDialog):
         )
 
     def _on_signed_in(self, user) -> None:
-        log.info("settings: signed in as %s", user.describe())
+        log.info("settings: signed in as %s", user.log_label())
         self._groups = []
         self._my_group_ids = None
         self._refresh_account_state()
