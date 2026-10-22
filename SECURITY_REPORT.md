@@ -26,7 +26,7 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
 **Git history:** I searched all 28 commits for secrets and found none; gitleaks confirmed this on 2026-10-22 across all 31 commits. The repo contains only the public OAuth client id (`warning_light_desktop`), the `yourcompany` placeholder and test dummies.
 
 **Verification:**
-- All 9 macOS and 10 Windows test scripts pass, run with PySide6 and offscreen Qt. They were re-run after the second-pass and follow-up fixes, and `shellcheck` passes on `macos/install.sh`.
+- All 10 macOS and 11 Windows test scripts pass (originally 9 and 10; the new security tests added the rest), run with PySide6 and offscreen Qt. They were re-run after the second-pass and follow-up fixes, and `shellcheck` passes on `macos/install.sh`.
 - The M7 and L22 fixes were also checked with targeted cases on both platforms (see those entries).
 - `python -m py_compile` passes on every changed Python file.
 - `bash -n` and `shellcheck` pass on all shell scripts.
@@ -38,7 +38,14 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
   - Inno Setup 6.7.3 compiled `ZendeskWarningLight.iss` and `Launcher.iss` around that build into `ZendeskWarningLight-Setup-2.9.0.exe` (38 MB).
   - `Setup.exe /S` installed per user with the HKCU Run value and started the app. Launched again on its own, the app showed its tray icon and the first-run Settings dialog. `Setup.exe /S /uninstall` removed the app folder, the Run value and the uninstall entry. All exit codes were 0.
   - **One difference from a real build:** PySide6 6.12 (the newest version `requirements.txt` allows) needs Windows' own `icuuc.dll`, which Wine 9 doesn't have, so this build used PySide6 6.8.3, which is also in range. A real Windows build will pick up 6.12.
-- Still not tested: the app on a real Windows PC with PySide6 6.12, signing in against a real Zendesk account, the `.cmd` Intune wrappers, machine-wide `/ALLUSERS` installs as SYSTEM, and the macOS installer. **Please test these on real Windows and macOS machines before you release.**
+- **Since 2026-10-22, CI on real machines** (see Continuous checks): every test passes on real Windows and macOS with PySide6 6.12. The Windows build and installer, the Intune wrappers as SYSTEM, the machine-wide install and the macOS `.app` build are all checked on every push.
+- **Still not tested:**
+  - signing in against a real Zendesk account (it needs an account and a browser);
+  - the app's windows and tray on a real desktop with a person using it (CI runs offscreen);
+  - Intel Macs (the CI Mac is Apple silicon);
+  - `install/install-macos.sh` end to end, which builds from GitHub and registers a login item.
+  
+  **Please do a manual smoke test of these before a release.**
 
 ---
 
@@ -71,7 +78,7 @@ Automated scanners, run on top of the manual review. Every tool was downloaded f
   - B404 (×3) flags `import subprocess` itself.
 
 **Semgrep triage (4):**
-- **Fixed (S4):** `python-logger-credential-disclosure` in `{windows,macos}/zwl/auth.py`. When a refresh was rejected, the raw Zendesk reply (up to 200 characters) went into `warning-light.log`, which people attach to support requests. No token was seen in practice, but the body isn't under our control. Now only the OAuth `error` code (such as `invalid_grant`) is logged.
+- **Fixed (S4):** `python-logger-credential-disclosure` in `{windows,macos}/zwl/auth.py`. When a refresh was rejected, the raw Zendesk reply (up to 200 characters) went into `warning-light.log`, which people attach to support requests. No token was seen in practice, but the body isn't under our control. The first fix logged only the OAuth `error` code. CodeQL still traced that back to the reply of a request that carried the refresh token (`py/clear-text-logging-sensitive-data`), so the final fix logs only the HTTP status (`refresh token rejected (HTTP 400)`). CodeQL now reports no open alerts.
 - **Fixed (S1, second rule):** `dangerous-subprocess-use-tainted-env-args` on the first version of the S1 fix, which built the path from `%SystemRoot%`. The environment can change that, so the fix asks Windows for the directory instead.
 - **False positive:** `insecure-file-permissions` on `os.chmod(path, 0o700)` in `macos/zwl/paths.py`. 0700 is owner-only (this is the L5 fix); the rule flags any mode that includes the execute bit, which a directory needs.
 
@@ -103,7 +110,7 @@ The checks that were run once by hand during the review are now permanent test s
   - **L5:** `tokens.json` is 0600 (macOS/Linux).
   - **L6:** the refresh and the code exchange don't follow redirects.
   - **I15:** another account's address is refused and nothing is sent.
-  - **S4:** a rejected refresh logs the OAuth error code, not the reply body.
+  - **S4:** a rejected refresh logs the HTTP status and nothing from the reply.
   - **L8, L10, L22:** bad config types, path-like sound names and UNC animation paths are neutralised.
   - **L12:** hostile `Retry-After` values (junk, negative, huge, HTTP-date) give bounded waits.
 - **`macos/tests/test_keystore.py`** (10 checks, plus 5 on a real Mac): L19 and S3, described in the L19 row.
@@ -111,7 +118,7 @@ The checks that were run once by hand during the review are now permanent test s
 **The tests were checked against old code, to confirm they catch the holes:**
 - On the commit before the second pass (`403df7a`), exactly the 19 checks for M7, I15, S4 and L22 fail. On that code, the attacker server really did receive the bearer token.
 - On the commit before the first review (`bcaa05a`), the script stops with an error at the first check, because the subdomain validation did not exist yet. That still counts as a failed run.
-- On the current code, all 74 checks pass on Linux. CI runs them on real Windows and macOS (below).
+- On the current code, all 74 checks pass on Linux, and in CI on real Windows and macOS (below).
 
 ## Continuous checks on GitHub (2026-10-22)
 
@@ -132,6 +139,37 @@ New files in `.github/`:
 - Default token permissions are `contents: read`, with any extra permission granted per job and explained in a comment.
 - `persist-credentials: false` on every checkout, and concurrency limits on each workflow.
 - `actionlint` and `zizmor` (a security linter for GitHub Actions) report no findings.
+
+**Results on real machines.** All jobs pass on commit `ce09f1d`: [tests run](https://github.com/Karlmit/Zendesk-Warning-Light/actions/runs/39734820452), [CodeQL run](https://github.com/Karlmit/Zendesk-Warning-Light/actions/runs/39734820484). The parts that matter most for security:
+
+- **Windows (`windows-latest`, PySide6 6.12, the version Wine couldn't load):**
+  - all 11 test scripts pass, including `test_security.py`;
+  - `build.ps1 -Installer` builds `ZendeskWarningLight.exe` (version 2.9.0) and the setup;
+  - the per-user silent install and uninstall pass;
+  - `Intune-Install.cmd` run as SYSTEM logs `Detected: SYSTEM - installing machine-wide for all users` and installs to Program Files with the HKLM Run value, and **no copy of the app is running as SYSTEM afterwards (M3 confirmed)**;
+  - `Intune-Uninstall.cmd` as SYSTEM removes it, exit code 0.
+- **macOS (`macos-latest`):**
+  - all 10 test scripts pass;
+  - `test_keystore.py` does **16/16 checks, including a real login-Keychain round trip through `security -i` (L19 confirmed on macOS)**;
+  - `build.sh` builds `ZendeskWarningLight.app`, which passes `codesign --verify --strict` and `plutil -lint`.
+- **Fuzzing in CI:** about 2.4 million inputs in 2 minutes per push, with no invariant broken.
+- **CodeQL:** 0 open alerts. It found one (S4, above), which was fixed.
+- **CI problems fixed along the way:**
+  - the first run's per-user install step hung, because `Start-Process -Wait` waited for the app the installer starts; it now waits for the installer process only;
+  - the first macOS run skipped the real Keychain check, because the test restored `shutil.which` wrongly; on a Mac it now fails instead of skipping.
+
+## OpenSSF Scorecard (2026-10-22)
+
+The score went from **2.1 to 6.7 / 10**. Every check that code or settings could fix is now 10/10: Dangerous-Workflow, Dependency-Update-Tool, Fuzzing, Pinned-Dependencies, SAST, Security-Policy, Token-Permissions, plus Binary-Artifacts and Vulnerabilities, which were already 10. What is left:
+
+| Check | Score | What it would take | Status |
+|---|---|---|---|
+| Branch-Protection, Code-Review | 0 | Protect `main` so that changes go through a reviewed pull request with the CI checks passing | **Owner decision.** It would end direct pushes to `main`, which is how this project works today. Even with only one maintainer, requiring a PR with green checks (no approval) would stop a broken or malicious push before it reaches the `curl \| bash` installer (M5) |
+| License | 0 | Add a `LICENSE` file | **Owner decision.** A licence is a legal choice I shouldn't make; without one, others have no right to reuse the code |
+| Signed-Releases, Packaging | n/a | Publish tagged GitHub releases, ideally built by CI with signed artifacts or provenance | **Owner decision.** Tied to M5 (installs follow `main`) |
+| CII-Best-Practices | 0 | Fill in the OpenSSF Best Practices questionnaire at bestpractices.dev | Owner, about an hour of form-filling |
+| Maintained, Contributors | 0 | Time (the repository is under 90 days old) and outside contributors | Nothing to do |
+| CI-Tests | n/a | Counts PRs that ran CI; none exist because changes go straight to `main` | Follows from Branch-Protection |
 
 ---
 
@@ -269,6 +307,12 @@ New files in `.github/`:
 - **Repository:** `git ls-files` shows no build output, credentials or token files.
 
 ## Changed files
+
+**2026-10-22 (tools, tests and CI):**
+- **New:** `.github/workflows/{tests,codeql,scorecard}.yml`, `.github/dependabot.yml`, `.github/scripts/run-as-system.ps1`, `SECURITY.md`, `fuzz/{fuzz_token_hosts.py,requirements.in,requirements.txt}`, `{windows,macos}/requirements-build.{in,txt}`, `{windows,macos}/tests/test_security.py`, `macos/tests/test_keystore.py`.
+- **Changed:** `{windows,macos}/zwl/{auth,modes,zendesk}.py`, `windows/zwl/settings_ui.py`, `macos/zwl/keystore.py`, `windows/build.ps1`, `macos/{build.sh,run.command,INSTALL.md,README.md}`.
+
+**2026-10-21:**
 
 `install/install-macos.sh`, `README.md`, `macos/README.md`, `macos/{build.sh,install.sh,run.command,requirements.txt}`, `macos/tools/verify_oauth.py`, `macos/zwl/{auth,config,keystore,monitor,overlay,paths,settings_ui,sound,zendesk}.py`, `windows/{.gitignore,README.md,build.ps1,install.ps1,requirements.txt}`, `windows/installer/{ZendeskWarningLight.iss,Intune-Install.cmd,Intune-Uninstall.cmd,uninstall.ps1}`, `windows/tools/verify_oauth.py`, `windows/zwl/{auth,config,keystore,monitor,overlay,settings_ui,sound,zendesk}.py`, new `.gitignore`, new `SECURITY_REPORT.md`.
 
