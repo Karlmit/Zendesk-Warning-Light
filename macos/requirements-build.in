@@ -1,0 +1,3 @@
+# Inputs for requirements-build.txt. Edit this, then regenerate it with the command at the top of that file.
+-r requirements.txt
+pyinstaller>=6,<7

@@ -170,6 +170,15 @@ def describe_bad_reply(resp: requests.Response) -> str:
         resp.headers.get("Content-Type", "unknown"), snippet)
 
 
+def _oauth_error(resp: requests.Response) -> str:
+    """The ``error`` code of an OAuth error reply, such as "invalid_grant"."""
+    try:
+        error = resp.json().get("error")
+    except (ValueError, AttributeError):
+        return "(no error code)"
+    return str(error)[:64] if error else "(no error code)"
+
+
 def json_body(resp: requests.Response) -> Any:
     """``resp.json()``, but a non-JSON reply becomes an :class:`AuthError`."""
     try:
@@ -354,7 +363,9 @@ class TokenStore:
             self._access_token = ""
             self._expires_at = 0.0
             self.save()
-            log.error("refresh token rejected (%s): %s", resp.status_code, resp.text[:200])
+            # Only the OAuth error code, never the raw body: the log file is often
+            # sent along with support requests.
+            log.error("refresh token rejected (%s): %s", resp.status_code, _oauth_error(resp))
             raise AuthExpired(
                 "Your Zendesk sign-in has expired. Open Settings and sign in again."
             )

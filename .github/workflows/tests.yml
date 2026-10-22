@@ -1,0 +1,149 @@
+# Tests, a real build and installer checks on Windows and macOS.
+#
+# The security regression tests (tests/test_security.py, macos/tests/test_keystore.py)
+# run with the rest. The Windows job also builds the installer and checks, as SYSTEM
+# the way Intune runs it, that a machine-wide install never starts the app as
+# SYSTEM (SECURITY_REPORT.md M3).
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: windows, os: windows-latest }
+          - { platform: macos, os: macos-latest }
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned dependencies (hash-checked)
+        run: python -m pip install --require-hashes -r requirements-build.txt
+      - name: Run every test script
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          failed=0
+          for t in tests/test_*.py; do
+            echo "::group::$t"
+            if python "$t"; then echo "PASS $t"; else echo "::error::FAIL $t"; failed=1; fi
+            echo "::endgroup::"
+          done
+          exit $failed
+
+  windows-installer:
+    name: windows build + installer
+    needs: test
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Build the app and installer with build.ps1
+        run: |
+          # build.ps1 makes its venv with "py -3.12"; the runner's Python is not
+          # registered with the py launcher, so give it the venv up front.
+          python -m venv .venv
+          .\build.ps1 -Installer
+      - name: Per-user silent install and uninstall
+        run: |
+          $setup = (Resolve-Path dist\ZendeskWarningLight-Setup-*.exe).Path
+          $dir = "$env:LOCALAPPDATA\Programs\ZendeskWarningLight"
+          $p = Start-Process $setup -ArgumentList '/S', "/LOG=$env:RUNNER_TEMP\user.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "install exit code $($p.ExitCode)" }
+          if (-not (Test-Path "$dir\ZendeskWarningLight.exe")) { throw 'not installed per user' }
+          $run = Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' ZendeskWarningLight
+          if ($run -ne "`"$dir\ZendeskWarningLight.exe`"") { throw "unexpected Run value: $run" }
+          $p = Start-Process $setup -ArgumentList '/S', '/uninstall' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstall exit code $($p.ExitCode)" }
+          if (Test-Path $dir) { throw 'install folder left behind' }
+          Write-Output 'per-user install and uninstall OK'
+      - name: Intune install as SYSTEM never starts the app as SYSTEM (M3)
+        run: |
+          $dist = (Resolve-Path dist).Path
+          & ..\.github\scripts\run-as-system.ps1 -Command "$dist\Intune-Install.cmd" -Log "$env:RUNNER_TEMP\system-install.log"
+          if ($LASTEXITCODE -ne 0) { throw "Intune-Install.cmd as SYSTEM failed: $LASTEXITCODE" }
+          $exe = "$env:ProgramFiles\ZendeskWarningLight\ZendeskWarningLight.exe"
+          if (-not (Test-Path $exe)) { throw 'not installed machine-wide' }
+          $run = Get-ItemPropertyValue 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run' ZendeskWarningLight
+          if ($run -ne "`"$exe`"") { throw "unexpected HKLM Run value: $run" }
+          Start-Sleep -Seconds 5
+          $procs = Get-CimInstance Win32_Process -Filter "Name='ZendeskWarningLight.exe'"
+          foreach ($proc in $procs) {
+            $owner = Invoke-CimMethod -InputObject $proc -MethodName GetOwner
+            Write-Output "running: pid $($proc.ProcessId) as $($owner.Domain)\$($owner.User)"
+            if ($owner.User -eq 'SYSTEM') { throw 'the app was started as SYSTEM' }
+          }
+          Write-Output 'machine-wide install as SYSTEM OK; app not started as SYSTEM'
+      - name: Intune uninstall as SYSTEM
+        run: |
+          $dist = (Resolve-Path dist).Path
+          & ..\.github\scripts\run-as-system.ps1 -Command "$dist\Intune-Uninstall.cmd" -Log "$env:RUNNER_TEMP\system-uninstall.log"
+          if ($LASTEXITCODE -ne 0) { throw "Intune-Uninstall.cmd as SYSTEM failed: $LASTEXITCODE" }
+          if (Test-Path "$env:ProgramFiles\ZendeskWarningLight") { throw 'machine-wide folder left behind' }
+          Write-Output 'machine-wide uninstall OK'
+      - name: Keep the installer and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-installer
+          path: |
+            windows/dist/ZendeskWarningLight-Setup-*.exe
+            ${{ runner.temp }}/*.log
+          retention-days: 14
+
+  macos-build:
+    name: macos build
+    needs: test
+    runs-on: macos-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: macos
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Build the app with build.sh
+        run: PYTHON=python ./build.sh --app-only
+      - name: Check the bundle
+        run: |
+          apps=(dist/*.app)
+          app=${apps[0]}
+          test -d "$app" || { echo "::error::no .app produced"; exit 1; }
+          codesign --verify --deep --strict "$app"
+          plutil -lint "$app/Contents/Info.plist"
+          echo "built $app"

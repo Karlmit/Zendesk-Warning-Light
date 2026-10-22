@@ -71,8 +71,10 @@ fi
 PYV="$VENV/bin/python"
 
 say "Installing dependencies..."
-"$PYV" -m pip install --quiet --upgrade pip
-"$PYV" -m pip install --quiet -r requirements.txt "pyinstaller>=6,<7"
+# Exact versions with SHA-256 hashes, so a tampered or swapped package fails the
+# install. To change versions, edit requirements-build.in and regenerate with the
+# command at the top of requirements-build.txt.
+"$PYV" -m pip install --quiet --require-hashes -r requirements-build.txt
 
 # zwl/__init__.py is the single source of truth for the version.
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' zwl/__init__.py)"

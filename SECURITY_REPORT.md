@@ -1,8 +1,8 @@
 # Security Report — Zendesk Warning Light
 
-**Date:** 2026-10-21
+**Date:** 2026-10-21, updated 2026-10-22
 **Scope:** Whole repository: `windows/` and `macos/` app code (`zwl/*`), tools, build and install scripts, installers (Inno Setup, Intune, PowerShell, shell), dependency manifests, and full git history.
-**Method:** Manual review, split across four parallel reviewers (auth/secrets, app/API/UI, macOS packaging, Windows packaging), then cross-checked and merged. A second pass on the same day re-read the app code, installers and the first pass's fixes, and added M7, L22 and I15. A follow-up fixed every open item that could be fixed and checked here: L20, L21, I11, I12 and I15.
+**Method:** Manual review, split across four parallel reviewers (auth/secrets, app/API/UI, macOS packaging, Windows packaging), then cross-checked and merged. A second pass on the same day re-read the app code, installers and the first pass's fixes, and added M7, L22 and I15. A follow-up fixed every open item that could be fixed and checked here: L20, L21, I11, I12 and I15. On 2026-10-22, automated scanners were added on top (see Tool scans), plus permanent security regression tests, CI on real Windows and macOS machines, and hash-pinned dependencies; L19 and the lock-file item were closed.
 
 ## Summary
 
@@ -11,8 +11,9 @@
 | Critical | 0 | 0 | 0 |
 | High | 0 | 0 | 0 |
 | Medium | 7 | 6 | 1 |
-| Low | 22 | 21 | 1 |
+| Low | 22 | 22 | 0 (L19 has an accepted residual part) |
 | Info | 15 | 9 | 6 |
+| Tool scans (S1–S4) | 4 | 4 | 0 |
 
 Nothing was found that a remote attacker could exploit on its own. The most important fixes:
 
@@ -22,7 +23,7 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
 - The `curl | bash` installer can no longer run halfway if the download is cut off.
 - The installer's downloads can no longer be downgraded to plain HTTP (man-in-the-middle).
 
-**Git history:** I searched all 28 commits for secrets and found none. The repo contains only the public OAuth client id (`warning_light_desktop`), the `yourcompany` placeholder and test dummies.
+**Git history:** I searched all 28 commits for secrets and found none; gitleaks confirmed this on 2026-10-22 across all 31 commits. The repo contains only the public OAuth client id (`warning_light_desktop`), the `yourcompany` placeholder and test dummies.
 
 **Verification:**
 - All 9 macOS and 10 Windows test scripts pass, run with PySide6 and offscreen Qt. They were re-run after the second-pass and follow-up fixes, and `shellcheck` passes on `macos/install.sh`.
@@ -38,6 +39,87 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
   - `Setup.exe /S` installed per user with the HKCU Run value and started the app. Launched again on its own, the app showed its tray icon and the first-run Settings dialog. `Setup.exe /S /uninstall` removed the app folder, the Run value and the uninstall entry. All exit codes were 0.
   - **One difference from a real build:** PySide6 6.12 (the newest version `requirements.txt` allows) needs Windows' own `icuuc.dll`, which Wine 9 doesn't have, so this build used PySide6 6.8.3, which is also in range. A real Windows build will pick up 6.12.
 - Still not tested: the app on a real Windows PC with PySide6 6.12, signing in against a real Zendesk account, the `.cmd` Intune wrappers, machine-wide `/ALLUSERS` installs as SYSTEM, and the macOS installer. **Please test these on real Windows and macOS machines before you release.**
+
+---
+
+## Tool scans (2026-10-22)
+
+Automated scanners, run on top of the manual review. Every tool was downloaded from its official release and checked against the published SHA-256 checksum where one exists.
+
+| Tool | What it checks | Result |
+|---|---|---|
+| gitleaks 8.30.1 | Secrets in all 31 commits and in the working tree | **No leaks found** |
+| GitHub secret scanning + push protection | Secrets on every push (server side) | Already enabled on the repo |
+| pip-audit 2.10.1 | Known CVEs in every pinned dependency (`{windows,macos}/requirements-build.txt`) | **No known vulnerabilities** |
+| Bandit 1.9.4 | Python security anti-patterns, 9,100 lines | 0 high, 0 medium, 36 low. Triage below |
+| Semgrep 1.182.1 (`p/python`, `p/security-audit`, `p/secrets`, `p/command-injection`) | Broader security rules, 69 files | 4 results. Triage below |
+| ShellCheck | All shell scripts | Clean |
+| PSScriptAnalyzer | All three `.ps1` scripts | No errors; style warnings only (`Write-Host`, `ShouldProcess`) |
+| OpenSSF Scorecard 5.6.0 | Repository security practices | Baseline **2.1 / 10**. See S-items below |
+
+**Bandit triage (36 low):**
+- **Fixed (S1):** `explorer` started by bare name in `windows/zwl/settings_ui.py` (B607); it is looked up in the current directory first. Now the full path from `GetSystemWindowsDirectoryW`.
+- **Fixed (S2):** `assert` used as a check in `{windows,macos}/zwl/modes.py` (B101); `python -O` drops asserts. Now an explicit `ValueError`.
+- **Fixed (S3, found while triaging):** `macos/zwl/keystore.py` fell back to whatever `security` was first on `PATH` when `/usr/bin/security` was missing. Now only `/usr/bin/security` is used.
+- **False positives (33):**
+  - B105 (×12) flags `TOKEN_PATH = "/oauth/tokens"` and empty-string resets as "hardcoded passwords".
+  - B404/B603 (×14) flag subprocess calls that all use a fixed absolute binary (`/usr/bin/security`, `/bin/launchctl`, `/usr/bin/afplay`, `/usr/bin/open`, `/usr/bin/plutil`) with an argument list and no shell.
+  - B606 (×2) flags `os.startfile` on the app's own data folder and log.
+  - B112 (×2) flags `except Exception: continue` when skipping malformed `state.json` entries.
+  - B404 (×3) flags `import subprocess` itself.
+
+**Semgrep triage (4):**
+- **Fixed (S4):** `python-logger-credential-disclosure` in `{windows,macos}/zwl/auth.py`. When a refresh was rejected, the raw Zendesk reply (up to 200 characters) went into `warning-light.log`, which people attach to support requests. No token was seen in practice, but the body isn't under our control. Now only the OAuth `error` code (such as `invalid_grant`) is logged.
+- **Fixed (S1, second rule):** `dangerous-subprocess-use-tainted-env-args` on the first version of the S1 fix, which built the path from `%SystemRoot%`. The environment can change that, so the fix asks Windows for the directory instead.
+- **False positive:** `insecure-file-permissions` on `os.chmod(path, 0o700)` in `macos/zwl/paths.py`. 0700 is owner-only (this is the L5 fix); the rule flags any mode that includes the execute bit, which a directory needs.
+
+**Hash-pinned lock files (closes the open lock-file item):**
+- New `{windows,macos}/requirements-build.in` list the version ranges, including PyInstaller. They are compiled with `uv pip compile --generate-hashes` into `requirements-build.txt`; the exact command is at the top of each lock.
+- The Windows lock targets Windows x64 / Python 3.12. The macOS lock is universal for Python 3.10 and later, so it works on both Intel and Apple silicon.
+- `build.ps1`, `build.sh` and `run.command` now install with `pip install --require-hashes -r requirements-build.txt`, so a tampered or swapped package fails the build.
+- The unpinned `pip install --upgrade pip` steps are removed; the pip that ships with Python handles hashes fine.
+
+---
+
+## Security regression tests (2026-10-22)
+
+The checks that were run once by hand during the review are now permanent test scripts, so a later change that reopens a hole fails the build:
+
+- **`{windows,macos}/tests/test_security.py`** (72 checks): each check names the finding it guards and tries the actual attack:
+  - **M1:** 10 hostile subdomains are rejected, and `check_base_url`, `sign_in` and `access_token` refuse non-Zendesk addresses.
+  - **M2/M7:** two real local HTTP servers, one playing Zendesk and one an attacker. A `next_page` pointing at the attacker (absolute, `@host` and `//host` forms) is refused, and the attacker server receives no request at all. `_url` refuses 9 crafted values.
+  - **L1:** the real loopback listener refuses a wrong `state`, a bare `error=`, and a second redirect after the first.
+  - **L5:** `tokens.json` is 0600 (macOS/Linux).
+  - **L6:** the refresh and the code exchange don't follow redirects.
+  - **I15:** another account's address is refused and nothing is sent.
+  - **S4:** a rejected refresh logs the OAuth error code, not the reply body.
+  - **L8, L10, L22:** bad config types, path-like sound names and UNC animation paths are neutralised.
+  - **L12:** hostile `Retry-After` values (junk, negative, huge, HTTP-date) give bounded waits.
+- **`macos/tests/test_keystore.py`** (10 checks, plus 5 on a real Mac): L19 and S3, described in the L19 row.
+
+**The tests were checked against old code, to confirm they catch the holes:**
+- On the commit before the second pass (`403df7a`), exactly the 19 checks for M7, I15, S4 and L22 fail. On that code, the attacker server really did receive the bearer token.
+- On the commit before the first review (`bcaa05a`), the script stops with an error at the first check, because the subdomain validation did not exist yet. That still counts as a failed run.
+- On the current code, all 72 checks pass on Linux. CI runs them on real Windows and macOS (below).
+
+## Continuous checks on GitHub (2026-10-22)
+
+New files in `.github/`:
+
+| Workflow / setting | What it does |
+|---|---|
+| `workflows/tests.yml` | On every push and PR, on real `windows-latest` and `macos-latest` runners: installs the hash-pinned dependencies and runs every test script, including the security tests. Then it checks the installers on those runners: <br>• **Windows:** builds with `build.ps1 -Installer` (PySide6 6.12, the version Wine could not run) and runs a per-user silent install and uninstall. It then runs **`Intune-Install.cmd` as SYSTEM through a scheduled task**, the way Intune does, and checks for a machine-wide install in Program Files with the HKLM Run value, with **no copy of the app running as SYSTEM (M3)**. Last, it uninstalls with `Intune-Uninstall.cmd` as SYSTEM. <br>• **macOS:** builds the `.app` with `build.sh` and checks its signature and `Info.plist`. |
+| `workflows/codeql.yml` | CodeQL static analysis (`security-extended` queries) of the Python code and of the workflows themselves, on every push, every PR and weekly |
+| `workflows/scorecard.yml` | OpenSSF Scorecard on every push and weekly; results go to Security > Code scanning |
+| `dependabot.yml` | Weekly update PRs for both `requirements-build.txt` locks and for the pinned Actions |
+| Repository settings (enabled through the API) | Private vulnerability reporting, Dependabot alerts, Dependabot security updates. Secret scanning and push protection were already on. Non-provider patterns and validity checks need a paid GitHub plan and stayed off |
+| `SECURITY.md` | How to report a vulnerability privately, what is in scope, and what is checked |
+
+**Hardening of the workflows themselves:**
+- Every Action is pinned to a full commit SHA, choosing releases at least about two weeks old.
+- Default token permissions are `contents: read`, with any extra permission granted per job and explained in a comment.
+- `persist-credentials: false` on every checkout, and concurrency limits on each workflow.
+- `actionlint` and `zizmor` (a security linter for GitHub Actions) report no findings.
 
 ---
 
@@ -74,11 +156,12 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
   - The documented one-liner (both READMEs and the script header) now starts with `curl --proto '=https' --tlsv1.2 -fsSL`.
 - **Still relevant:** See M5. A checksum or signature check would also protect against a compromised source, not just a compromised network path.
 
-### M5. Installer builds whatever is on `main`, with no pin or checksum — OPEN
+### M5. Installer builds whatever is on `main`, with no pin or checksum — OPEN (owner decision)
 - **File:** `install/install-macos.sh`
 - **Issue:** The installer downloads the `main` branch and builds and runs it. Anyone who can push to `main`, including through a compromised account, reaches every new install and update.
 - **Already in place:** HTTPS only, `curl -f`, `set -euo pipefail`, and a `ZWL_REF` override. The script header now explains how to pin to a tag or commit.
 - **Not changed because:** "always latest" is the advertised way to update, so changing it is the owner's call.
+- **Since 2026-10-22:** every push to `main` now runs the full test suite, including the security tests, and CodeQL in CI, so a bad push is at least caught quickly. CI can't stop a push, though; only branch protection can (see Scorecard).
 - **Recommendation:**
   - Publish tagged releases and point the README one-liner at a tag.
   - Optionally publish a SHA-256 of the download and check it in the script.
@@ -117,11 +200,11 @@ Nothing was found that a remote attacker could exploit on its own. The most impo
 | L16 | Uninstaller copied itself to a predictable `%TEMP%` path and never deleted it | `windows/installer/uninstall.ps1` | **Fixed.** Random (GUID) name; the copy deletes itself |
 | L17 | The LaunchAgent plist was built by pasting `$HOME` into the XML, so `&` or `<` in the path broke it | `macos/install.sh` | **Fixed.** Fixed template; path written with `plutil -replace`; `chmod 644` |
 | L18 | `run.command` carried on after errors | `macos/run.command` | **Fixed.** `set -euo pipefail` |
-| L19 | macOS Keychain: the refresh token briefly appears in the `security … -w <token>` command line, and items made by the `security` tool can be read by any process of the same user | `macos/zwl/keystore.py` | **Open.** Couldn't be tested here, and a change could break token storage. Recommendation: use `SecItemAdd`/`SecItemCopyMatching` via ctypes or pyobjc |
+| L19 | macOS Keychain: the refresh token briefly appears in the `security … -w <token>` command line, and items made by the `security` tool can be read by any process of the same user | `macos/zwl/keystore.py` | **Fixed (2026-10-22), with an accepted residual part.** The token is now written with `security -i` on stdin, so it is never a command-line argument. A value with `"`, `\` or a newline, which could break the command's quoting, is refused (Zendesk tokens are hex). Because `security -i` exits 0 even on failure, the value is read back to confirm it was stored. Only `/usr/bin/security` is ever run (S3). New `macos/tests/test_keystore.py` checks that the secret never appears in any argv and that malformed values are refused, and does a real Keychain round trip on the macOS CI runner. **Accepted:** items made by the `security` tool trust that tool, so another process running as the same user can read the item back. Closing that needs a signed app calling Security.framework directly, and such a process could read `tokens.json` and the log anyway |
 | L20 | Uninstall deletes the whole `{app}` folder; if a user picked an existing folder, its contents are lost | `ZendeskWarningLight.iss` | **Fixed.** `DisableDirPage=yes`, so the installer always uses its own `{autopf}\ZendeskWarningLight` folder. An admin can still pass `/DIR=` on the command line, and the uninstaller deletes that folder too |
 | L21 | Windows build uses Python 3.10, which reaches end of life in October 2026 | `windows/build.ps1` | **Fixed.** `build.ps1` now uses `py -3.12`; the top-level README says so. Build machines need Python 3.12 installed |
 | L22 | The animation setting accepted any absolute path, including a UNC path such as `\\host\share\x.gif`. On Windows, just checking whether it exists (at startup and on every settings change) makes Windows connect to that host over SMB and send the user's NTLM hash. This is the same leak as L10, through the animation setting instead of the sound. It needs a crafted `config.json` or a user picking a network file. Found in the second pass | `{macos,windows}/zwl/config.py` | **Fixed.** New `config.is_network_path()` matches any path starting with two slashes or backslashes (`\\host`, `//host`, `\\?\UNC\…`). `Config.from_dict` resets such a value to the bundled animation, and `animation_path()` never returns one, as a second layer. Local absolute paths still work |
-| — | Hash-pinned lock files | both platforms | **Open.** Recommendation: `pip-compile --generate-hashes` plus `--require-hashes` for reproducible builds that show tampering |
+| — | Hash-pinned lock files | both platforms | **Fixed (2026-10-22).** `requirements-build.txt` with SHA-256 hashes, installed with `--require-hashes`. See Tool scans |
 
 ## Info
 

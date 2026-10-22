@@ -72,7 +72,7 @@ chmod +x build.sh install.sh uninstall.sh run.command
 ```bash
 python3 -m venv .venv
 ./.venv/bin/python -m pip install --upgrade pip
-./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python -m pip install --require-hashes -r requirements-build.txt
 ./.venv/bin/python tools/preflight.py
 ```
 

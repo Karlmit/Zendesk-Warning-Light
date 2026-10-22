@@ -52,7 +52,7 @@ would be built for the wrong architecture. `build.sh` refuses to continue in tha
 ## First: check the Mac can run it
 
 ```bash
-python3 -m venv .venv && ./.venv/bin/python -m pip install -r requirements.txt
+python3 -m venv .venv && ./.venv/bin/python -m pip install --require-hashes -r requirements-build.txt
 ./.venv/bin/python tools/preflight.py
 ```
 

@@ -28,9 +28,11 @@ if (-not (Test-Path $python)) {
 }
 
 Write-Host 'Installing dependencies...' -ForegroundColor Cyan
-& $python -m pip install --quiet --upgrade pip
-# Bounded: 6.x carries the onefile temp-dir and bootloader sys.path fixes.
-& $python -m pip install --quiet -r requirements.txt 'pyinstaller>=6.10,<7'
+# Exact versions with SHA-256 hashes, so a tampered or swapped package fails the
+# install instead of ending up in the exe. To change versions, edit
+# requirements-build.in and regenerate with the command at the top of the lock.
+& $python -m pip install --quiet --require-hashes -r requirements-build.txt
+if ($LASTEXITCODE -ne 0) { throw 'pip could not install requirements-build.txt' }
 
 Write-Host 'Generating application icon...' -ForegroundColor Cyan
 $env:QT_QPA_PLATFORM = 'offscreen'

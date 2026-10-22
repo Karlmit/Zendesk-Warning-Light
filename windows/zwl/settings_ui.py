@@ -1203,6 +1203,14 @@ def _escape(text: str) -> str:
     return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _windows_dir() -> str:
+    import ctypes
+    buf = ctypes.create_unicode_buffer(260)
+    if not ctypes.windll.kernel32.GetSystemWindowsDirectoryW(buf, len(buf)):
+        raise OSError("GetSystemWindowsDirectoryW failed")
+    return buf.value
+
+
 def _open_path(path: Path) -> None:
     try:
         if path.exists():
@@ -1210,4 +1218,6 @@ def _open_path(path: Path) -> None:
         else:
             os.startfile(str(path.parent))
     except OSError:
-        subprocess.Popen(["explorer", str(path.parent)])
+        # Full path from the OS, not %SystemRoot% (which the environment can change)
+        # and not a bare "explorer" (looked up in the current directory first).
+        subprocess.Popen([_windows_dir() + "\\explorer.exe", str(path.parent)])  # nosec B603

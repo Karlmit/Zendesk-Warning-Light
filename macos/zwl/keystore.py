@@ -9,12 +9,12 @@ So on this platform ``tokens.json`` holds no secret at all - only the marker
 :mod:`zwl.auth` identical to the Windows version: it still calls ``encrypt`` and
 ``decrypt`` and treats the result as an opaque string.
 
-One deliberate trade-off: we shell out to ``/usr/bin/security`` rather than binding
-Security.framework through ctypes. The CLI is on every Mac and needs no extra
-dependency, but the password appears in this process's argv for the moment the
-command runs, so a local user running ``ps`` at exactly the wrong time could see it.
-For a per-user read-only Zendesk token on a single-user laptop that is an acceptable
-trade; if it ever is not, the fix is SecItemAdd via ctypes.
+We shell out to ``/usr/bin/security`` rather than binding Security.framework
+through ctypes: the CLI is on every Mac and needs no extra dependency. The token is
+written through ``security -i`` on stdin, never as a command-line argument, so it
+does not show up in ``ps`` while the command runs. Items made by the CLI trust the
+CLI, so another process running as the same user could read this one back; on a
+per-user laptop that process could read tokens.json and the log too.
 """
 
 from __future__ import annotations
@@ -37,28 +37,39 @@ _TIMEOUT = 15
 
 
 def _security_available() -> bool:
-    return bool(shutil.which(SECURITY) or shutil.which("security"))
+    # Only the system copy: a "security" found on PATH could be anything.
+    return bool(shutil.which(SECURITY))
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess:
-    binary = SECURITY if shutil.which(SECURITY) else "security"
     return subprocess.run(
-        [binary] + args,
+        [SECURITY] + args,
         capture_output=True, text=True, timeout=_TIMEOUT, check=False,
     )
 
 
 def _store(secret: str) -> bool:
-    result = _run([
-        "add-generic-password",
-        "-s", SERVICE,
-        "-a", ACCOUNT,
-        "-D", "application password",
-        "-j", "Zendesk Warning Light sign-in",
-        "-U",                     # update in place if it already exists
-        "-w", secret,
-    ])
-    if result.returncode != 0:
+    # Interactive mode reads the command from stdin, which keeps the secret out of
+    # argv. Its line parser splits on spaces and honours double quotes, so a value
+    # that could break out of the quotes is refused rather than escaped.
+    if not secret or any(c in secret for c in '"\\\n\r'):
+        log.error("refresh token has characters the Keychain command cannot carry")
+        return False
+    command = (
+        'add-generic-password -s {} -a {} -D "application password" '
+        '-j "Zendesk Warning Light sign-in" -U -w "{}"\n'
+    ).format(SERVICE, ACCOUNT, secret)
+    try:
+        result = subprocess.run(
+            [SECURITY, "-i"], input=command,
+            capture_output=True, text=True, timeout=_TIMEOUT, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.error("could not run %s: %s", SECURITY, exc)
+        return False
+    # security -i exits 0 even when the command inside it failed, so read the
+    # value back rather than trusting the exit code.
+    if result.returncode != 0 or _fetch() != secret:
         log.error("could not write to the Keychain (%s): %s",
                   result.returncode, (result.stderr or "").strip()[:200])
         return False

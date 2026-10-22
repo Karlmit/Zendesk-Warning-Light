@@ -139,7 +139,8 @@ class DayMode:
 
     def copy(self, new_id: str, new_name: str) -> "DayMode":
         clone = DayMode.from_dict(self.to_dict())
-        assert clone is not None
+        if clone is None:               # not an assert: python -O would drop it
+            raise ValueError("mode {!r} could not be copied".format(self.id))
         clone.id = new_id
         clone.name = new_name
         return clone

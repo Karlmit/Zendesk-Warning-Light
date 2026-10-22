@@ -1,0 +1,25 @@
+# Weekly update PRs for the pinned Python dependencies and the pinned GitHub
+# Actions. Security fixes come sooner, through Dependabot security updates.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /windows
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: /macos
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
