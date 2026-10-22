@@ -24,6 +24,29 @@ class Release:
 
 RELEASES: tuple[Release, ...] = (
     Release(
+        version="2.9.1",
+        date="2026-10-22",
+        headline="Security update",
+        changes=(
+            "The log file no longer records ticket subjects or your name and email: "
+            "only ticket numbers and your Zendesk user ID. Start the app with "
+            "<b>--verbose</b> to log subjects while troubleshooting.",
+            "On a computer that several people sign in to, each person's warning light "
+            "now starts on its own. Before, the first person to start it stopped it "
+            "for everyone else.",
+        ),
+        fixes=(
+            "Your Zendesk sign-in is only ever sent to your own company's Zendesk "
+            "address, whatever a setting or a reply from the server says.",
+            "When IT installs the app for everyone, it is no longer started with full "
+            "system rights.",
+            "Settings can no longer point the app at files on a network share.",
+            "Unusually large replies from the server are refused instead of filling memory.",
+        ),
+        note="Nothing changes in how the app looks or works. See SECURITY_REPORT.md "
+             "for the full security review.",
+    ),
+    Release(
         version="2.9.0",
         date="2026-10-08",
         headline="When it came in",

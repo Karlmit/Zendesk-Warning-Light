@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Application** | Zendesk Warning Light 2.9.0, for Windows and macOS |
+| **Application** | Zendesk Warning Light 2.9.1, for Windows and macOS |
 | **Review period** | 21–22 October 2026 |
 | **Source** | [github.com/Karlmit/Zendesk-Warning-Light](https://github.com/Karlmit/Zendesk-Warning-Light), `main` branch |
 | **Latest verified build** | All automated checks passed on commit `ff83687` ([tests](https://github.com/Karlmit/Zendesk-Warning-Light/actions/runs/39739311976), [CodeQL](https://github.com/Karlmit/Zendesk-Warning-Light/actions/runs/39739311897)) |
