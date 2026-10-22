@@ -177,7 +177,7 @@ _OAUTH_ERRORS = (
 )
 
 
-def _oauth_error(resp: requests.Response) -> str:
+def _reply_error_code(resp: requests.Response) -> str:
     """The OAuth ``error`` code of a reply, such as "invalid_grant".
 
     Returns one of the fixed names above, never text from the reply, so nothing
@@ -382,7 +382,7 @@ class TokenStore:
             self.save()
             # Only the OAuth error code, never the raw body: the log file is often
             # sent along with support requests.
-            log.error("refresh token rejected (%s): %s", resp.status_code, _oauth_error(resp))
+            log.error("refresh token rejected (%s): %s", resp.status_code, _reply_error_code(resp))
             raise AuthExpired(
                 "Your Zendesk sign-in has expired. Open Settings and sign in again."
             )
